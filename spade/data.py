@@ -1,5 +1,4 @@
 import torch
-import torch.functional as F
 from itertools import product
 from functools import lru_cache as cache
 
@@ -75,3 +74,85 @@ def rel_vectors(tokenizer, text, coord, img_width, img_height):
     rel_dist = normalize(rel_dist)
     rel_angles = torch.clip(rel_angles / (2 * torch.pi) * 60, 0, 60)
     return rel_centres[:, :, 0], rel_centres[:, :, 1], rel_dist, rel_angles
+
+
+def partition_indices(n, psize, overlap=0):
+    assert psize > overlap
+    # SPECIAL CASE
+    if n <= psize - overlap:
+        return [slice(0, n)]
+    indices = range(0, n - overlap, psize - overlap)
+    indices = list(indices)
+    if indices[-1] < n:
+        indices.append(indices[-1] - overlap + psize)
+    ranges = [slice(i, j + overlap) for (i, j) in zip(indices, indices[1:])]
+    return ranges
+
+
+def parse_input(tokenizer, data,
+                max_length=256,
+                overlap=128,
+                n_dist_unit=1000):
+    print(data.keys())
+    texts = data['text']
+    coord = data['coord']
+    width = data['img_sz']['width']
+    height = data['img_sz']['height']
+
+    def normalize(x, w):
+        return int(round(x * n_dist_unit / w))
+
+    def coord_center(poly):
+        x = [pt[0] for pt in poly]
+        y = [pt[1] for pt in poly]
+        return [
+            normalize(sum(x) / len(x), width),
+            normalize(sum(y) / len(y), height)]
+
+    def chunk(seq, part_indices, max_length, pad):
+        chunks = [seq[i] for i in part_indices]
+        last_len = len(chunks[-1])
+        chunks[-1] = chunks[-1] + [pad] * (max_length - last_len)
+        return chunks
+
+    text_tokens = []
+    box_tokens = []
+    header_ids = []
+    for (text, coord) in zip(texts, data['coord']):
+        tk = tokenizer.tokenize(text)
+        text_tokens.extend(tk)
+        box_tokens.extend(len(tk) * [coord])
+        header_ids += [1 if i == 0 else 0 for i, _ in enumerate(tk)]
+    rn_center_x_ids = [coord_center(c)[0] for c in box_tokens]
+    rn_center_y_ids = [coord_center(c)[1] for c in box_tokens]
+
+    # INSERT SPECIAL TOKENS
+    text_tokens = [tokenizer.cls_token] + text_tokens + [tokenizer.sep_token]
+    text_tokens_ids = tokenizer.convert_tokens_to_ids(text_tokens)
+    rn_center_x_ids = [0] + rn_center_x_ids + [n_dist_unit]
+    rn_center_y_ids = [0] + rn_center_y_ids + [n_dist_unit]
+    header_ids = [1] + header_ids + [1]
+    # attention_mask = [1 for _ in text_tokens]
+    # TODO: attention_mask
+    original_len = len(text_tokens_ids)
+
+    # print(len(text_tokens), len(rn_center_x_ids))
+    assert len(text_tokens) == len(rn_center_x_ids)
+    assert len(text_tokens) == len(rn_center_y_ids)
+
+    # CHUNKING
+    part_indices = partition_indices(len(text_tokens), max_length, overlap)
+    text_tokens_ids = chunk(text_tokens_ids, part_indices,
+                            max_length, tokenizer.pad_token_id)
+    rn_center_x_ids = chunk(
+        rn_center_x_ids, part_indices, max_length, n_dist_unit)
+    rn_center_y_ids = chunk(
+        rn_center_y_ids, part_indices, max_length, n_dist_unit)
+
+    return {'input_ids': torch.tensor(text_tokens_ids),
+            "position_ids": {
+                'x': torch.tensor(rn_center_x_ids),
+                'y': torch.tensor(rn_center_y_ids)},
+            'header_ids': header_ids,
+            "original_length": original_len,
+            "part_indices": part_indices}
