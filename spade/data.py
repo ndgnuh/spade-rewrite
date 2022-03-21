@@ -89,11 +89,8 @@ def partition_indices(n, psize, overlap=0):
     return ranges
 
 
-def parse_input(tokenizer, data,
-                max_length=256,
-                overlap=128,
-                n_dist_unit=1000):
-    print(data.keys())
+def parse_input(tokenizer, data, max_length=512, overlap=256, n_dist_unit=1000):
+    #     print(data.keys())
     texts = data['text']
     coord = data['coord']
     width = data['img_sz']['width']
@@ -132,16 +129,17 @@ def parse_input(tokenizer, data,
     rn_center_x_ids = [0] + rn_center_x_ids + [n_dist_unit]
     rn_center_y_ids = [0] + rn_center_y_ids + [n_dist_unit]
     header_ids = [1] + header_ids + [1]
-    # attention_mask = [1 for _ in text_tokens]
-    # TODO: attention_mask
+    attention_mask = [1 for _ in text_tokens]  # TODO
     original_len = len(text_tokens_ids)
 
-    # print(len(text_tokens), len(rn_center_x_ids))
+
+#     print(len(text_tokens), len(rn_center_x_ids))
     assert len(text_tokens) == len(rn_center_x_ids)
     assert len(text_tokens) == len(rn_center_y_ids)
 
     # CHUNKING
     part_indices = partition_indices(len(text_tokens), max_length, overlap)
+#     part_indices[-1] = slice(part_indices[-1].start, part_indices[-1].start+max_length)
     text_tokens_ids = chunk(text_tokens_ids, part_indices,
                             max_length, tokenizer.pad_token_id)
     rn_center_x_ids = chunk(
@@ -149,10 +147,9 @@ def parse_input(tokenizer, data,
     rn_center_y_ids = chunk(
         rn_center_y_ids, part_indices, max_length, n_dist_unit)
 
-    return {'input_ids': torch.tensor(text_tokens_ids),
-            "position_ids": {
-                'x': torch.tensor(rn_center_x_ids),
-                'y': torch.tensor(rn_center_y_ids)},
-            'header_ids': header_ids,
-            "original_length": original_len,
-            "part_indices": part_indices}
+    return {
+        'input_ids': torch.tensor(text_tokens_ids).unsqueeze(0),
+        'position_ids': (torch.tensor(rn_center_x_ids).unsqueeze(0), torch.tensor(rn_center_y_ids).unsqueeze(0)),
+        "part_indices": part_indices,
+        "original_length": original_len,
+    }
