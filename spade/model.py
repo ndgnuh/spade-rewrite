@@ -151,26 +151,26 @@ class Spade(nn.Module):
             cfg, n_dist_unit=n_dist_unit)
         self.score_s = GraphGenerator(cfg, fields)
         self.score_g = GraphGenerator(cfg, fields)
+        self.w_segment = nn.Linear(768, 768)
 
     def forward_batch(self, batch):
         return [self.forward_single(**features) for features in batch]
 
-    def forward_single(self, input_ids, position_ids, original_length, part_indices):
-        encoded = torch.zeros(
-            input_ids.shape[0], part_indices[-1].stop, self.cfg.hidden_size)
-
+    def forward(self, input_ids, position_ids, original_length, part_indices):
+        encoded = torch.zeros(part_indices[-1].stop, self.cfg.hidden_size)
         # combine chunks
         x, y = position_ids
         for (i, slice_) in enumerate(part_indices):
-            position_ids_i = (x[:, i, :], y[i, :])
-            input_ids_i = input_ids[:, i, :]
+            position_ids_i = (x[i, :].unsqueeze(0), y[i, :].unsqueeze(0))
+            input_ids_i = input_ids[i, :].unsqueeze(0)
             encoded_i = self.bert(input_ids=input_ids_i,
                                   position_ids=position_ids_i).last_hidden_state
             # print(encoded_i.shape, encoded[:, slice_, :].shape, (slice_))
-            encoded[:, slice_, :] += encoded_i
+            encoded_i = self.w_segment(encoded_i).squeeze(0)
+            encoded[slice_, :] += encoded_i
 
         # generate graph
-        encoded = encoded[:, :original_length, :]
+        encoded = encoded[:original_length, :]
         score = torch.cat([
             self.score_s(encoded).unsqueeze(1),
             self.score_g(encoded).unsqueeze(1)

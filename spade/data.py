@@ -89,8 +89,9 @@ def partition_indices(n, psize, overlap=0):
     return ranges
 
 
-def parse_input(tokenizer, data, max_length=512, overlap=256, n_dist_unit=1000):
+def parse_input(tokenizer, data, max_length=512, max_chunk=5, overlap=256, n_dist_unit=1000):
     #     print(data.keys())
+    # max_flatten_length = max_length * max_chunk - (max_chunk - 1) * overlap
     texts = data['text']
     coord = data['coord']
     width = data['img_sz']['width']
@@ -139,7 +140,8 @@ def parse_input(tokenizer, data, max_length=512, overlap=256, n_dist_unit=1000):
 
     # CHUNKING
     part_indices = partition_indices(len(text_tokens), max_length, overlap)
-#     part_indices[-1] = slice(part_indices[-1].start, part_indices[-1].start+max_length)
+    part_indices[-1] = slice(part_indices[-1].start,
+                             max(part_indices[-1].stop, max_length))
     text_tokens_ids = chunk(text_tokens_ids, part_indices,
                             max_length, tokenizer.pad_token_id)
     rn_center_x_ids = chunk(
@@ -148,8 +150,8 @@ def parse_input(tokenizer, data, max_length=512, overlap=256, n_dist_unit=1000):
         rn_center_y_ids, part_indices, max_length, n_dist_unit)
 
     return {
-        'input_ids': torch.tensor(text_tokens_ids).unsqueeze(0),
-        'position_ids': (torch.tensor(rn_center_x_ids).unsqueeze(0), torch.tensor(rn_center_y_ids).unsqueeze(0)),
+        'input_ids': torch.tensor(text_tokens_ids),
+        'position_ids': (torch.tensor(rn_center_x_ids), torch.tensor(rn_center_y_ids)),
         "part_indices": part_indices,
         "original_length": original_len,
     }
