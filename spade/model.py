@@ -172,7 +172,7 @@ class Spade(nn.Module):
         # generate graph
         encoded = encoded[:original_length, :]
         score = torch.cat([
-            self.score_s(encoded).unsqueeze(1),
-            self.score_g(encoded).unsqueeze(1)
-        ], dim=1)
+            self.score_s(encoded).unsqueeze(0),
+            self.score_g(encoded).unsqueeze(0)
+        ], dim=0)
         return score
