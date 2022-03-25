@@ -107,7 +107,7 @@ def parse_input(tokenizer, data, max_length=512, max_chunk=5, overlap=256, n_dis
     height = data['img_sz']['height']
 
     def normalize(x, w):
-        return int(round(x * n_dist_unit / w))
+        return int(round(x / w * n_dist_unit))
 
     def coord_center(poly):
         x = [pt[0] for pt in poly]
@@ -144,23 +144,38 @@ def parse_input(tokenizer, data, max_length=512, max_chunk=5, overlap=256, n_dis
     # header_ids = [1] + header_ids + [1]
     attention_mask = [1 for _ in text_tokens]  # TODO
     original_len = len(text_tokens)
-    text_tokens_ids = tokenizer.convert_tokens_to_ids(text_tokens)
 
-
-#     print(len(text_tokens), len(rn_center_x_ids))
+    # print(len(text_tokens), len(rn_center_x_ids))
     assert len(text_tokens) == len(rn_center_x_ids)
     assert len(text_tokens) == len(rn_center_y_ids)
 
-    # CHUNKING
-    part_indices = partition_indices(len(text_tokens), max_length, overlap)
-    part_indices[-1] = slice(part_indices[-1].start,
-                             max(part_indices[-1].stop, max_length))
-    text_tokens_ids = chunk(text_tokens_ids, part_indices,
-                            max_length, tokenizer.pad_token_id)
-    rn_center_x_ids = chunk(
-        rn_center_x_ids, part_indices, max_length, n_dist_unit)
-    rn_center_y_ids = chunk(
-        rn_center_y_ids, part_indices, max_length, n_dist_unit)
+    # INSERT SPECIAL TOKENS
+    text_tokens = [tokenizer.cls_token] + text_tokens + [tokenizer.sep_token]
+    rn_center_x_ids = [0] + rn_center_x_ids + [n_dist_unit]
+    rn_center_y_ids = [0] + rn_center_y_ids + [n_dist_unit]
+    # header_ids = [1] + header_ids + [1]
+    original_len = len(text_tokens)
+    attention_mask = [1 for _ in range(original_len)]
+
+    #     print(len(text_tokens), len(rn_center_x_ids))
+    assert len(text_tokens) == len(rn_center_x_ids)
+    assert len(text_tokens) == len(rn_center_y_ids)
+
+    # PADDING
+    if len(rn_center_x_ids) < max_length:
+        pad_length = max_length - len(rn_center_x_ids)
+        text_tokens += [tokenizer.pad_token] * pad_length
+        rn_center_x_ids += [0] * pad_length
+        rn_center_y_ids += [0] * pad_length
+        attention_mask += [0] * pad_length
+
+    # TRIMMING
+    if len(rn_center_x_ids) > max_length:
+        text_tokens = text_tokens[:max_length]
+        rn_center_x_ids = rn_center_x_ids[:max_length]
+        rn_center_y_ids = rn_center_y_ids[:max_length]
+
+    text_tokens_ids = tokenizer.convert_tokens_to_ids(text_tokens)
 
     if "label" in data:
         label = data["label"]
@@ -181,11 +196,11 @@ def parse_input(tokenizer, data, max_length=512, max_chunk=5, overlap=256, n_dis
 
     return {
         'input_ids': torch.tensor(text_tokens_ids),
-        'position_ids': (torch.tensor(rn_center_x_ids), torch.tensor(rn_center_y_ids)),
-        "part_indices": part_indices,
-        "original_length": original_len,
+        'position_ids': torch.tensor([rn_center_x_ids,
+                                      rn_center_y_ids]),
+        "attention_mask": torch.tensor(attention_mask),
         "text_tokens": text_tokens,
-        "label": new_label
+        "new_label": new_label,
     }
 
 

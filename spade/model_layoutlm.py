@@ -1,10 +1,25 @@
 from torch import nn
 from transformers import AutoModel, AutoTokenizer, BatchEncoding
+from torch.utils.data import Dataset, DataLoader
 from dataclasses import dataclass
 from typing import Optional
 from . import data
 import torch
+import json
 from argparse import Namespace
+
+
+def partially_from_pretrained(config, model_name, **kwargs):
+    pretrain = AutoModel.from_pretrained(model_name, **kwargs)
+    model = type(pretrain)(config)
+    pretrain_sd = pretrain.state_dict()
+    for (k, v) in model.named_parameters():
+        if k not in pretrain_sd:
+            continue
+        if pretrain_sd[k].data.shape == v.shape:
+            v.data = pretrain_sd[k].data
+
+    return model
 
 
 def normalize_box(box, width, height):
@@ -22,10 +37,18 @@ def poly_to_box(poly):
     return [min(x), min(y), max(x), max(y)]
 
 
-def parse_input(image, words, actual_boxes, tokenizer, config, label, fields,
-                cls_token_box=[0, 0, 0, 0],
-                sep_token_box=[1000, 1000, 1000, 1000],
-                pad_token_box=[0, 0, 0, 0]):
+def parse_input(
+    image,
+    words,
+    actual_boxes,
+    tokenizer,
+    config,
+    label,
+    fields,
+    cls_token_box=[0, 0, 0, 0],
+    sep_token_box=[1000, 1000, 1000, 1000],
+    pad_token_box=[0, 0, 0, 0],
+):
     width, height = image.size
     boxes = [normalize_box(b, width, height) for b in actual_boxes]
 
@@ -45,16 +68,19 @@ def parse_input(image, words, actual_boxes, tokenizer, config, label, fields,
     # Truncation: account for [CLS] and [SEP] with "- 2".
     special_tokens_count = 2
     if len(tokens) > config.max_position_embeddings - special_tokens_count:
-        tokens = tokens[: (config.max_position_embeddings -
-                           special_tokens_count)]
-        token_boxes = token_boxes[: (
-            config.max_position_embeddings - special_tokens_count)]
-        actual_bboxes = actual_bboxes[: (
-            config.max_position_embeddings - special_tokens_count)]
-        token_actual_boxes = token_actual_boxes[: (
-            config.max_position_embeddings - special_tokens_count)]
-        are_box_first_tokens = are_box_first_tokens[: (
-            config.max_position_embeddings - special_tokens_count)]
+        tokens = tokens[: (config.max_position_embeddings - special_tokens_count)]
+        token_boxes = token_boxes[
+            : (config.max_position_embeddings - special_tokens_count)
+        ]
+        actual_bboxes = actual_bboxes[
+            : (config.max_position_embeddings - special_tokens_count)
+        ]
+        token_actual_boxes = token_actual_boxes[
+            : (config.max_position_embeddings - special_tokens_count)
+        ]
+        are_box_first_tokens = are_box_first_tokens[
+            : (config.max_position_embeddings - special_tokens_count)
+        ]
 
     # add [SEP] token, with corresponding token boxes and actual boxes
     tokens += [tokenizer.sep_token]
@@ -96,31 +122,49 @@ def parse_input(image, words, actual_boxes, tokenizer, config, label, fields,
     assert len(are_box_first_tokens) == config.max_position_embeddings
 
     # Label parsing
-    labels = [data.expand_rel_s(score=label[0],
-                                tokenizer=tokenizer,
-                                coords=boxes,
-                                texts=words,
-                                labels=fields),
-              data.expand_rel_g(score=label[1],
-                                tokenizer=tokenizer,
-                                coords=boxes,
-                                texts=words,
-                                labels=fields)]
+    labels = [
+        data.expand_rel_s(
+            score=label[0],
+            tokenizer=tokenizer,
+            coords=boxes,
+            texts=words,
+            labels=fields,
+        ),
+        data.expand_rel_g(
+            score=label[1],
+            tokenizer=tokenizer,
+            coords=boxes,
+            texts=words,
+            labels=fields,
+        ),
+    ]
     labels = torch.tensor(labels)
 
     nfields = len(fields)
     npos = config.max_position_embeddings
-    labels = labels[:, :npos, :(npos - nfields)]
+    labels = labels[:, :npos, : (npos - nfields)]
     b, nnodes, nwords = labels.shape
     # b * (nl + nt) * nt
     # -> b * (nl + nt + padding_length) * (nl + nt + padding_length)
     # + 2 because special tokens
-    labels = torch.cat([labels,
-                        torch.zeros(b, config.max_position_embeddings - nnodes + nfields, nwords)],
-                       dim=1)
-    labels = torch.cat([labels,
-                        torch.zeros(b, config.max_position_embeddings + nfields, config.max_position_embeddings - nwords)],
-                       dim=2)
+    labels = torch.cat(
+        [
+            labels,
+            torch.zeros(b, config.max_position_embeddings - nnodes + nfields, nwords),
+        ],
+        dim=1,
+    )
+    labels = torch.cat(
+        [
+            labels,
+            torch.zeros(
+                b,
+                config.max_position_embeddings + nfields,
+                config.max_position_embeddings - nwords,
+            ),
+        ],
+        dim=2,
+    )
 
     itc_labels = labels[0, :nfields, :].transpose(0, 1).argmax(dim=-1)
     stc_labels = labels[:, nfields:, :].transpose(1, 2)
@@ -131,15 +175,15 @@ def parse_input(image, words, actual_boxes, tokenizer, config, label, fields,
 
     # The unsqueezed dim is the batch dim for each type
     return {
-        'text_tokens': tokens,
-        'input_ids': torch.tensor(input_ids).unsqueeze(0),
-        'attention_mask': torch.tensor(input_mask).unsqueeze(0),
-        'token_type_ids': torch.tensor(segment_ids).unsqueeze(0),
-        'bbox': torch.tensor(token_boxes).unsqueeze(0),
-        'actual_bbox': torch.tensor(token_actual_boxes).unsqueeze(0),
+        "text_tokens": tokens,
+        "input_ids": torch.tensor(input_ids).unsqueeze(0),
+        "attention_mask": torch.tensor(input_mask).unsqueeze(0),
+        "token_type_ids": torch.tensor(segment_ids).unsqueeze(0),
+        "bbox": torch.tensor(token_boxes).unsqueeze(0),
+        "actual_bbox": torch.tensor(token_actual_boxes).unsqueeze(0),
         "itc_labels": itc_labels.unsqueeze(0),
         "stc_labels": stc_labels.unsqueeze(0),
-        "are_box_first_tokens": torch.tensor(are_box_first_tokens).unsqueeze(0)
+        "are_box_first_tokens": torch.tensor(are_box_first_tokens).unsqueeze(0),
     }
 
 
@@ -147,22 +191,22 @@ def batch_parse_input(tokenizer, config, batch_data):
     batch = []
     text_tokens = []
     for d in batch_data:
-        texts = d['text']
-        actual_boxes = [poly_to_box(b) for b in d['coord']]
-        image = Namespace(size=(d['img_sz']['width'],
-                                d['img_sz']['height']))
-        label = d['label']
-        fields = d['fields']
-        features = parse_input(image, texts, actual_boxes, tokenizer, config,
-                               label=label, fields=fields)
-        text_tokens.append(features.pop('text_tokens'))
+        texts = d["text"]
+        actual_boxes = [poly_to_box(b) for b in d["coord"]]
+        image = Namespace(size=(d["img_sz"]["width"], d["img_sz"]["height"]))
+        label = d["label"]
+        fields = d["fields"]
+        features = parse_input(
+            image, texts, actual_boxes, tokenizer, config, label=label, fields=fields
+        )
+        text_tokens.append(features.pop("text_tokens"))
         batch.append(features)
 
     batch_features = {}
     for key in batch[0]:
         batch_features[key] = torch.cat([b[key] for b in batch], dim=0)
 
-    batch_features['text_tokens'] = text_tokens
+    batch_features["text_tokens"] = text_tokens
 
     return batch_features
 
@@ -191,8 +235,7 @@ class RelationExtractor(nn.Module):
             self.backbone_hidden_size, self.n_relations * self.head_hidden_size
         )
 
-        self.dummy_node = nn.Parameter(
-            torch.Tensor(1, self.backbone_hidden_size))
+        self.dummy_node = nn.Parameter(torch.Tensor(1, self.backbone_hidden_size))
         nn.init.normal_(self.dummy_node)
 
     def forward(self, h_q, h_k):
@@ -222,63 +265,80 @@ class SpadeOutput:
     loss: Optional[torch.Tensor] = None
 
 
-def hybrid_layoutlm(layoutlm, bert, **kwargs):
-    bert = AutoModel.from_pretrained(bert, **kwargs)
-    layoutlm = AutoModel.from_pretrained(layoutlm, **kwargs)
+def hybrid_layoutlm(config_layoutlm, config_bert, layoutlm, bert, **kwargs):
+    bert = partially_from_pretrained(config_bert, bert, **kwargs)
+    layoutlm = partially_from_pretrained(config_layoutlm, layoutlm, **kwargs)
     layoutlm.embeddings.word_embeddings = bert.embeddings.word_embeddings
     return layoutlm
 
 
 class LayoutLMSpade(nn.Module):
-    def __init__(self, config, layoutlm, bert, n_classes, max_position_embeddings=None, **kwargs):
+    def __init__(
+        self, config_layoutlm, config_bert, layoutlm, bert, n_classes, **kwargs
+    ):
         super().__init__()
-        self.config = config
+        self.config_bert = config_bert
+        self.config_layoutlm = config_layoutlm
         self.n_classes = n_classes
-        self.backbone = hybrid_layoutlm(layoutlm, bert, **kwargs)
-
-        if max_position_embeddings is not None:
-            config.max_position_embeddings = max_position_embeddings
-            self.backbone.embeddings.position_embeddings = nn.Embedding(
-                max_position_embeddings, config.hidden_size)
+        # self.backbone = partially_from_pretrained(config_bert, bert)
+        self.backbone = hybrid_layoutlm(
+            config_layoutlm, config_bert, layoutlm, bert, **kwargs
+        )
 
         # (1) Initial token classification
+        hidden_dropout_prob = config_bert.hidden_dropout_prob
         self.itc_layer = nn.Sequential(
-            nn.Dropout(0.1),
-            nn.Linear(config.hidden_size, config.hidden_size),
-            nn.Dropout(0.1),
-            nn.Linear(config.hidden_size, n_classes),
-            nn.ReLU()
+            # nn.Dropout(hidden_dropout_prob),
+            # nn.Linear(config_bert.hidden_size, config_bert.hidden_size),
+            nn.Dropout(hidden_dropout_prob),
+            nn.Linear(config_bert.hidden_size, n_classes),
+            nn.ReLU(),
         )
 
         # (2) Subsequent token classification
         self.stc_layer = RelationExtractor(
             n_relations=2,
-            backbone_hidden_size=config.hidden_size,
-            head_hidden_size=config.hidden_size,
-            head_p_dropout=0.1,
+            backbone_hidden_size=config_bert.hidden_size,
+            head_hidden_size=config_bert.hidden_size,
+            head_p_dropout=hidden_dropout_prob,
         )
 
         # Loss
         self.loss_func = nn.CrossEntropyLoss()
+        # self.loss_func = nn.BCEWithLogitsLoss()
         self.itc_loss_func = nn.NLLLoss()
 
+        # DEBUG
+        self.label_morph = nn.Linear(self.n_classes, 5)
+        self.graph_conv = nn.Sequential(
+            nn.Conv2d(2, 4, (3, 3), padding=1),
+            nn.Conv2d(4, 4, (5, 5), padding=3),
+            nn.Conv2d(4, 2, (3, 3), padding=1),
+        )
+
     def forward(self, batch):
-        if 'text_tokens' in batch:
+        if "text_tokens" in batch:
             # Text tokens
-            batch.pop('text_tokens')
+            batch.pop("text_tokens")
         batch = BatchEncoding(batch)
-        outputs = self.backbone(input_ids=batch.input_ids, bbox=batch.bbox,
-                                attention_mask=batch.attention_mask)  # , token_type_ids=token_type_ids)
+        outputs = self.backbone(
+            input_ids=batch.input_ids,
+            # bbox=batch.bbox,
+            attention_mask=batch.attention_mask,
+        )  # , token_type_ids=token_type_ids)
         last_hidden_state = outputs.last_hidden_state
         last_hidden_state = last_hidden_state.transpose(0, 1).contiguous()
-        itc_outputs = self.itc_layer(
-            last_hidden_state).transpose(0, 1).contiguous()
-        stc_outputs = self.stc_layer(
-            last_hidden_state, last_hidden_state).squeeze(0)
-        out = SpadeOutput(itc_outputs=itc_outputs,
-                          stc_outputs=stc_outputs,
-                          attention_mask=batch.attention_mask,
-                          loss=self._get_loss(itc_outputs, stc_outputs, batch))
+        itc_outputs = self.itc_layer(last_hidden_state).transpose(0, 1).contiguous()
+        stc_outputs = self.stc_layer(last_hidden_state, last_hidden_state).squeeze(0)
+        # itc_labels = batch.itc_labels
+        # itc_labels = torch.functional.onehots(itc_labels, self.n_classes)
+        # batch.itc_labels = self.label_morph(batch.itc_labels)
+        out = SpadeOutput(
+            itc_outputs=(itc_outputs),
+            stc_outputs=stc_outputs,
+            attention_mask=batch.attention_mask,
+            loss=self._get_loss(itc_outputs, stc_outputs, batch),
+        )
         return out
 
     def _get_loss(self, itc_outputs, stc_outputs, batch):
@@ -289,72 +349,89 @@ class LayoutLMSpade(nn.Module):
 
         return loss
 
-    def _get_itc_loss(self, itc_outputs, batch):
-        return self.itc_loss_func(torch.log(itc_outputs.transpose(-1, -2) + 1), batch.itc_labels)
-
     # def _get_itc_loss(self, itc_outputs, batch):
-    #     itc_mask = batch["are_box_first_tokens"].view(-1)
+    #     return self.itc_loss_func(itc_outputs.transpose(-1, -2), batch.itc_labels)
 
-    #     itc_logits = itc_outputs.view(-1, self.n_classes)
-    #     itc_logits = itc_logits[itc_mask]
+    def _get_itc_loss(self, itc_outputs, batch):
+        itc_mask = batch["are_box_first_tokens"].view(-1).bool()
+        itc_mask = torch.where(itc_mask)
 
-    #     itc_labels = batch["itc_labels"].view(-1)
-    #     itc_labels = itc_labels[itc_mask]
+        itc_logits = itc_outputs.view(-1, self.n_classes)
+        itc_logits = itc_logits[itc_mask]
 
-    #     itc_loss = self.loss_func(itc_logits, itc_labels)
+        itc_labels = batch["itc_labels"].view(-1)
+        itc_labels = itc_labels[itc_mask]
 
-    #     return itc_loss
+        itc_loss = self.loss_func(itc_logits, itc_labels)
 
-    def _get_stc_loss(self, stc_outputs, batch):
-        labels = batch.stc_labels
-        outputs = stc_outputs.transpose(0, 1)
-        nrel = outputs.shape[1]
-        # bsize = outputs.shape[0]
-        loss = [
-            self.loss_func(outputs[:, i, :, :], labels[:, i, :, :])
-            for i in range(nrel)]
-        # loss = 0
-        # for b in range(bsize):
-        #     for i in range(nrel):
-        #         loss += self.loss_func(outputs[b, i, :, :], labels[b, i, :, :])
-        return sum(loss)
-        # return sum([self.loss_func(stc_outputs[:, i, :, :], batch.stc_labels[:, i, :, :])
-        #             for i in range(2)])
+        return itc_loss
 
     # def _get_stc_loss(self, stc_outputs, batch):
-    #     invalid_token_mask = 1 - batch["attention_mask"]
+    #     labels = batch.stc_labels
+    #     outputs = stc_outputs.transpose(0, 1)
+    #     mask_x, mask_y = torch.where(batch.attention_mask.bool())
+    #     nrel = labels.shape[1]
+    #     losses = [
+    #         self.loss_func(outputs[:, i, mask_x, mask_y], labels[:, i, mask_x, mask_y])
+    #         for i in range(nrel)
+    #     ]
+    #     return sum(losses) / nrel
 
-    #     bsz, max_seq_length = invalid_token_mask.shape
-    #     device = invalid_token_mask.device
+    #         inv_atm = (1 - batch.attention_mask)[:, None, :]
 
-    #     # invalid_token_mask = torch.cat(
-    #     #     [inv_attention_mask, torch.zeros([bsz, 1]).to(device)], axis=1
-    #     # ).bool()
-    #     stc_outputs.masked_fill_(invalid_token_mask[:, None, :], -10000.0)
+    #         labels = labels.transpose(0, 1).masked_fill(inv_atm, -10000.0)
+    #         outputs = labels.masked_fill(inv_atm, -10000.0)
 
-    #     self_token_mask = (
-    #         torch.eye(max_seq_length, max_seq_length).to(device).bool()
-    #     )
-    #     stc_outputs.masked_fill_(self_token_mask[None, :, :], -10000.0)
+    #         outputs = outputs.transpose(0, 1)
+    #         labels = labels.transpose(0, 1)
 
-    #     stc_mask = batch["attention_mask"].view(-1).bool()
-    #     stc_mask = torch.where(stc_mask)
+    # nrel = outputs.shape[1]
+    # return loss
 
-    #     stc_logits = stc_outputs.view(-1, max_seq_length)
-    #     try:
-    #         stc_logits = stc_logits[stc_mask]
+    # bsize = outputs.shape[0]
+    # loss = [
+    #     self.loss_func(outputs[:, i, :, :], labels[:, i, :, :])
+    #     for i in range(nrel)]
+    # loss = 0
+    # for b in range(bsize):
+    #     for i in range(nrel):
+    #         loss += self.loss_func(outputs[b, i, :, :], labels[b, i, :, :])
+    # return sum(loss)
+    # return sum([self.loss_func(stc_outputs[:, i, :, :], batch.stc_labels[:, i, :, :])
+    #             for i in range(2)])
 
-    #         stc_labels = batch["stc_labels"]
-    #         stc_labels = stc_labels.flatten()
-    #         stc_labels = stc_labels[stc_mask]
+    def _get_stc_loss(self, stc_outputs, batch):
+        invalid_token_mask = 1 - batch["attention_mask"]
 
-    #         stc_loss = self.loss_func(stc_logits, stc_labels)
-    #     except Exception:
-    #         import traceback
-    #         traceback.print_exc()
-    #         return 0
+        bsz, max_seq_length = invalid_token_mask.shape
+        device = invalid_token_mask.device
 
-    #     return stc_loss
+        # invalid_token_mask = torch.cat(
+        #     [inv_attention_mask, torch.zeros([bsz, 1]).to(device)], axis=1
+        # ).bool()
+        stc_outputs.masked_fill_(invalid_token_mask[:, None, :].bool(), -10000.0)
+
+        self_token_mask = torch.eye(max_seq_length, max_seq_length).to(device).bool()
+        stc_outputs.masked_fill_(self_token_mask[None, :, :].bool(), -10000.0)
+
+        stc_mask = batch["attention_mask"].view(-1).bool()
+        stc_mask = torch.where(stc_mask)
+
+        stc_logits = stc_outputs.view(-1, max_seq_length)
+        stc_logits = stc_logits[stc_mask]
+
+        stc_labels = batch["stc_labels"]
+        stc_labels = stc_labels.flatten()
+        stc_labels = stc_labels[stc_mask]
+        # print("labels", stc_labels.shape)
+        # print("logits", stc_logits.shape)
+        stc_labels = torch.broadcast_to(stc_labels.unsqueeze(1), stc_logits.shape)
+
+        # print("labels", stc_labels.shape)
+        # print("logits", stc_logits.shape)
+        stc_loss = self.loss_func(stc_logits, stc_labels)
+
+        return stc_loss
 
     def true_adj_single(itc_out, stc_out, attention_mask):
         idx = attention_mask.diff(dim=-1).argmin(dim=-1) + 1
@@ -366,20 +443,20 @@ class LayoutLMSpade(nn.Module):
 class SpadeDataset(Dataset):
     def __init__(self, tokenizer, config, jsonl):
         super().__init__()
-        with open("sample_data/train.jsonl") as f:
-            data = [json.loads(l) for l in f.readlines()]
+        with open(jsonl) as f:
+            data = [json.loads(line) for line in f.readlines()]
 
         self.raw = data
-        self.fields = data[0]['fields']
+        self.fields = data[0]["fields"]
         self.nfields = len(self.fields)
         self._cached_length = len(data)
-        self.features = spade.batch_parse_input(tokenizer, config, data)
-        self.text_tokens = self.features.pop('text_tokens')
+        self.features = batch_parse_input(tokenizer, config, data)
+        self.text_tokens = self.features.pop("text_tokens")
 
     def __len__(self):
         return self._cached_length
 
     def __getitem__(self, idx):
-        return BatchEncoding({
-            key: self.features[key][idx] for key in self.features.keys()
-        })
+        return BatchEncoding(
+            {key: self.features[key][idx] for key in self.features.keys()}
+        )

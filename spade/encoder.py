@@ -66,16 +66,16 @@ class SpadeInputEmbeddings(nn.Module):
                 n_pos, cfg.hidden_size, _weight=torch.zeros(
                     n_pos, cfg.hidden_size)
             )
-        if "charSize" in self.input_embedding_components:
-            self.char_size_embeddings = nn.Embedding(
-                n_char_unit,
-                cfg.hidden_size,
-                _weight=torch.zeros(n_char_unit, cfg.hidden_size),
-            )
-        if "vertical" in self.input_embedding_components:
-            self.vertical_embeddings = nn.Embedding(
-                2, cfg.hidden_size, _weight=torch.zeros(2, cfg.hidden_size)
-            )
+        # if "charSize" in self.input_embedding_components:
+        #     self.char_size_embeddings = nn.Embedding(
+        #         n_char_unit,
+        #         cfg.hidden_size,
+        #         _weight=torch.zeros(n_char_unit, cfg.hidden_size),
+        #     )
+        # if "vertical" in self.input_embedding_components:
+        #     self.vertical_embeddings = nn.Embedding(
+        #         2, cfg.hidden_size, _weight=torch.zeros(2, cfg.hidden_size)
+        #     )
 
         # self.LayerNorm is not snake-cased to stick with TensorFlow model variable name and be able to load
         # any TensorFlow checkpoint file
@@ -84,28 +84,27 @@ class SpadeInputEmbeddings(nn.Module):
 
     def forward(
         self,
-        text_tok_ids,
-        rn_center_x_ids,
-        rn_center_y_ids,
-        vertical_ids,
-        char_size_ids,
-        header_ids,
+        input_ids,
+        position_ids,
         token_type_ids=None,
+        **kwargs
     ):
 
         if token_type_ids is None:
-            token_type_ids = torch.zeros_like(text_tok_ids)
+            token_type_ids = torch.zeros_like(input_ids)
 
-        words_embeddings = self.word_embeddings(text_tok_ids)
+        rn_center_x_ids, rn_center_y_ids = position_ids
+
+        words_embeddings = self.word_embeddings(input_ids)
         token_type_embeddings = self.token_type_embeddings(token_type_ids)
 
         embeddings = words_embeddings + token_type_embeddings
         if "seqPos" in self.input_embedding_components:
-            seq_length = text_tok_ids.size(1)
+            seq_length = input_ids.size(1)
             position_ids = torch.arange(
-                seq_length, dtype=torch.long, device=text_tok_ids.device
+                seq_length, dtype=torch.long, device=input_ids.device
             )
-            position_ids = position_ids.unsqueeze(0).expand_as(text_tok_ids)
+            position_ids = position_ids.unsqueeze(0).expand_as(input_ids)
             position_embeddings = self.position_embeddings(position_ids)
             embeddings += position_embeddings
 
@@ -120,13 +119,13 @@ class SpadeInputEmbeddings(nn.Module):
             embeddings += pos_x_embeddings
             embeddings += pos_y_embeddings
 
-        if "charSize" in self.input_embedding_components:
-            char_size_embeddings = self.char_size_embeddings(vertical_ids)
-            embeddings += char_size_embeddings
+        # if "charSize" in self.input_embedding_components:
+        #     char_size_embeddings = self.char_size_embeddings(vertical_ids)
+        #     embeddings += char_size_embeddings
             # print('cc')
-        if "vertical" in self.input_embedding_components:
-            vertical_embeddings = self.vertical_embeddings(vertical_ids)
-            embeddings += vertical_embeddings
+        # if "vertical" in self.input_embedding_components:
+        #     vertical_embeddings = self.vertical_embeddings(vertical_ids)
+        #     embeddings += vertical_embeddings
 
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
