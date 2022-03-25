@@ -342,20 +342,21 @@ class LayoutLMSpade(nn.Module):
         # (1) Initial token classification
         hidden_dropout_prob = config_bert.hidden_dropout_prob
         self.itc_layer = nn.Sequential(
-            nn.Dropout(hidden_dropout_prob),
-            nn.Linear(config_bert.hidden_size, config_bert.hidden_size),
             # Transpose(-1, -2),
-            # nn.BatchNorm1d(config_bert.hidden_size),
+            nn.BatchNorm1d(config_bert.max_position_embeddings),
             # Transpose(-1, -2),
+            # nn.Dropout(hidden_dropout_prob),
+            # nn.Linear(config_bert.hidden_size, config_bert.hidden_size),
             nn.Dropout(hidden_dropout_prob),
             nn.Linear(config_bert.hidden_size, n_classes),
         )
 
         # (2) Subsequent token classification
-        self.stc_layer = RelationTagger(
+        self.stc_layer = RelationExtractor(
             n_relations=2,
-            hidden_size=config_bert.hidden_size,
-            n_fields=self.n_classes,
+            backbone_hidden_size=config_bert.hidden_size,
+            head_hidden_size=config_bert.hidden_size,
+            head_p_dropout=hidden_dropout_prob,
         )
 
         # Loss
@@ -373,71 +374,41 @@ class LayoutLMSpade(nn.Module):
             nn.Conv2d(4, 2, (3, 3), padding=1),
         )
 
-    def forward(self, batch):
-        batch = BatchEncoding(batch)
-        outputs = self.backbone(
-            input_ids=batch.input_ids,
-            bbox=batch.bbox,
-            attention_mask=batch.attention_mask,
-        )
-        last_hidden_state = outputs.last_hidden_state
-        rel = self.stc_layer(last_hidden_state)
-        itc_outputs = rel[
-            0, :, : self.n_classes, : self.config_bert.max_position_embeddings
-        ]
-        stc_outputs = rel[
-            :, :, self.n_classes :, : self.config_bert.max_position_embeddings
-        ]
-        # print("itc", itc_outputs.shape)
-        # print("stc", stc_outputs.shape)
-
-        loss = self._get_rel_loss(rel, batch)
-        return Namespace(rel=rel, loss=loss, attention_mask=batch.attention_mask)
-
-    #         out = SpadeOutput(
-    #             itc_outputs=(itc_outputs),
-    #             stc_outputs=(stc_outputs),
-    #             attention_mask=batch.attention_mask,
-    #             loss=,
-    #         )
-
-    #         return out
-
     def _get_rel_loss(self, rel, batch):
         # print(rel.shape, batch.labels.shape)
         rel = rel.transpose(0, 1)
         return self.loss_func(rel, batch.labels)
 
-    # def forward(self, batch):
-    #     if "text_tokens" in batch:
-    #         # Text tokens
-    #         batch.pop("text_tokens")
-    #     batch = BatchEncoding(batch)
-    #     outputs = self.backbone(
-    #         input_ids=batch.input_ids,
-    #         # bbox=batch.bbox,
-    #         attention_mask=batch.attention_mask,
-    #     )  # , token_type_ids=token_type_ids)
-    #     last_hidden_state = outputs.last_hidden_state
-    #     # print(last_hidden_state.shape)
-    #     # last_hidden_state = last_hidden_state.transpose(-1, -2).contiguous()
-    #     itc_outputs = self.itc_layer(last_hidden_state)  # .transpose(0, 1).contiguous()
-    #     itc_outputs = self.act(itc_outputs)
-    #     # print(itc_outputs.shape)
-    #     last_hidden_state = last_hidden_state.transpose(0, 1).contiguous()
-    #     stc_outputs = self.stc_layer(last_hidden_state, last_hidden_state).squeeze(0)
-    #     # stc_outputs = self.threshold(stc_outputs)
-    #     # itc_outputs = self.threshold(itc_outputs)
-    #     # itc_labels = batch.itc_labels
-    #     # itc_labels = torch.functional.onehots(itc_labels, self.n_classes)
-    #     # batch.itc_labels = self.label_morph(batch.itc_labels)
-    #     out = SpadeOutput(
-    #         itc_outputs=(itc_outputs),
-    #         stc_outputs=(stc_outputs),
-    #         attention_mask=batch.attention_mask,
-    #         loss=self._get_loss(itc_outputs, stc_outputs, batch),
-    #     )
-    #     return out
+    def forward(self, batch):
+        if "text_tokens" in batch:
+            # Text tokens
+            batch.pop("text_tokens")
+        batch = BatchEncoding(batch)
+        outputs = self.backbone(
+            input_ids=batch.input_ids,
+            bbox=batch.bbox,
+            attention_mask=batch.attention_mask,
+        )  # , token_type_ids=token_type_ids)
+        last_hidden_state = outputs.last_hidden_state
+        # print(last_hidden_state.shape)
+        # last_hidden_state = last_hidden_state.transpose(-1, -2).contiguous()
+        itc_outputs = self.itc_layer(last_hidden_state)  # .transpose(0, 1).contiguous()
+        itc_outputs = self.act(itc_outputs)
+        # print(itc_outputs.shape)
+        last_hidden_state = last_hidden_state.transpose(0, 1).contiguous()
+        stc_outputs = self.stc_layer(last_hidden_state, last_hidden_state).squeeze(0)
+        # stc_outputs = self.threshold(stc_outputs)
+        # itc_outputs = self.threshold(itc_outputs)
+        # itc_labels = batch.itc_labels
+        # itc_labels = torch.functional.onehots(itc_labels, self.n_classes)
+        # batch.itc_labels = self.label_morph(batch.itc_labels)
+        out = SpadeOutput(
+            itc_outputs=(itc_outputs),
+            stc_outputs=(stc_outputs),
+            attention_mask=batch.attention_mask,
+            loss=self._get_loss(itc_outputs, stc_outputs, batch),
+        )
+        return out
 
     def _get_loss(self, itc_outputs, stc_outputs, batch):
         itc_loss = self._get_itc_loss(itc_outputs, batch)
