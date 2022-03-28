@@ -128,12 +128,17 @@ def parse_input(
         actual_bboxes.extend([actual_bbox] * len(word_tokens))
         token_actual_boxes.extend([actual_bbox] * len(word_tokens))
         are_box_first_tokens.extend([1] + [0] * (len(word_tokens) - 1))
-    classifier_label = gen_classifier_label(
-        label[0], tokens, fields, token_actual_boxes, tokenizer, words
-    )
-    other_label = classifier_label.other_label
-    special_label = classifier_label.other_label
-    classification = classifier_label.classification
+    if label is not None:
+        classifier_label = gen_classifier_label(
+            label[0], tokens, fields, token_actual_boxes, tokenizer, words
+        )
+        other_label = classifier_label.other_label
+        special_label = classifier_label.other_label
+        classification = classifier_label.classification
+    else:
+        other_label = len(fields)
+        special_label = len(fields)
+        classification = [0 for _ in tokens]
 
     # Truncation: account for [CLS] and [SEP] with "- 2".
     special_tokens_count = 2
@@ -188,7 +193,8 @@ def parse_input(
     assert len(token_boxes) == config.max_position_embeddings
     assert len(token_actual_boxes) == config.max_position_embeddings
     assert len(are_box_first_tokens) == config.max_position_embeddings
-    assert len(classification) == config.max_position_embeddings
+    if label is not None:
+        assert len(classification) == config.max_position_embeddings
 
     # Label parsing
     #     labels = [
@@ -243,17 +249,20 @@ def parse_input(
     #     assert stc_labels.shape[2] == config.max_position_embeddings
 
     # The unsqueezed dim is the batch dim for each type
+    def tensorize(x):
+        return torch.as_tensor(np.array(x))
+
     return {
         "text_tokens": tokens,
-        "input_ids": torch.tensor(input_ids).unsqueeze(0),
-        "attention_mask": torch.tensor(input_mask).unsqueeze(0),
-        "token_type_ids": torch.tensor(segment_ids).unsqueeze(0),
-        "bbox": torch.tensor(token_boxes).unsqueeze(0),
-        "actual_bbox": torch.tensor(token_actual_boxes).unsqueeze(0),
-        "itc_labels": torch.tensor(classification).unsqueeze(0),
+        "input_ids": tensorize(input_ids).unsqueeze(0),
+        "attention_mask": tensorize(input_mask).unsqueeze(0),
+        "token_type_ids": tensorize(segment_ids).unsqueeze(0),
+        "bbox": torch.clamp(tensorize(token_boxes), 0, 1000).unsqueeze(0),
+        "actual_bbox": tensorize(token_actual_boxes).unsqueeze(0),
+        "itc_labels": tensorize(classification).unsqueeze(0),
         # "stc_labels": stc_labels.unsqueeze(0),
-        # "labels": torch.tensor(labels).unsqueeze(0),
-        "are_box_first_tokens": torch.tensor(are_box_first_tokens).unsqueeze(0),
+        # "labels": tensorize(labels).unsqueeze(0),
+        "are_box_first_tokens": tensorize(are_box_first_tokens).unsqueeze(0),
     }
 
 
@@ -692,13 +701,16 @@ class LayoutLMSpade(nn.Module):
 
 
 class SpadeDataset(Dataset):
-    def __init__(self, tokenizer, config, jsonl):
+    def __init__(self, tokenizer, config, jsonl, test_mode=False):
         super().__init__()
         with open(jsonl) as f:
             data = [json.loads(line) for line in f.readlines()]
 
         self.raw = data
         self.fields = data[0]["fields"]
+        if test_mode:
+            for d in data:
+                d["label"] = None
         self.nfields = len(self.fields)
         self._cached_length = len(data)
         self.features = batch_parse_input(tokenizer, config, data)
