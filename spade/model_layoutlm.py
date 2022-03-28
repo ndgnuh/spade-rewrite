@@ -19,38 +19,100 @@ class Transpose(nn.Module):
         return x.transpose(self.dim_a, self.dim_b)
 
 
-class RelationTagger(nn.Module):
-    def __init__(self, n_relations, hidden_size, n_fields):
+class RelationTaggerOld(nn.Module):
+    def __init__(self, hidden_size, n_fields):
         super().__init__()
-        self.n_relations = n_relations
+        self.n_channels = 2
         self.n_fields = n_fields
-        self.label_embeds = nn.Embedding(n_fields, hidden_size)
-        self.W_h = nn.Linear(hidden_size, hidden_size)
-        self.W_d = nn.Linear(hidden_size, hidden_size)
-        self.W_0 = nn.ModuleList(
-            [nn.Linear(hidden_size, hidden_size) for i in range(n_relations)]
+        self.bias = nn.Parameter(
+            torch.ones(1, self.n_channels, hidden_size, hidden_size)
         )
-        self.W_1 = nn.ModuleList(
-            [nn.Linear(hidden_size, hidden_size) for i in range(n_relations)]
+        self.label_idx = torch.arange(0, self.n_fields, dtype=torch.long)
+        self.label_idx = torch.arange(0, self.n_fields, dtype=torch.long)
+        self.label_idx.require_grad = False
+        self.register_buffer("label_idx", self.label_idx)
+        self.label_embeddings = nn.ModuleList(
+            [nn.Embedding(n_fields, hidden_size) for _ in range(self.n_channels)]
+        )
+        self.key = nn.ModuleList(
+            [nn.Linear(hidden_size, hidden_size) for _ in range(self.n_channels)]
+        )
+        self.query = nn.ModuleList(
+            [nn.Linear(hidden_size, hidden_size) for _ in range(self.n_channels)]
+        )
+        self.value = nn.ModuleList(
+            [nn.Linear(hidden_size, hidden_size) for _ in range(self.n_channels)]
         )
 
     def forward(self, hidden):
-        idx = torch.arange(0, self.n_fields, device=hidden.device)
-        u = self.label_embeds(idx).unsqueeze(0)
-        u = torch.repeat_interleave(u, hidden.shape[0], dim=0)
+        idx = self.label_idx
+        label_embeddings = torch.cat(
+            [embed(idx).unsqueeze(0) for embed in self.label_embeddings], dim=0
+        )
+        label_embeddings = torch.repeat_interleave(
+            label_embeddings, hidden.shape[0], dim=0
+        )
         v = self.W_h(hidden)
-        d = self.W_d(v)
+        d = self.W_d(hidden)
         h = torch.cat([u, v], dim=1)
-        s_0 = torch.cat(
-            [torch.einsum("bih,bjh->bij", h, W(d)).unsqueeze(0) for W in self.W_0]
+        d2 = self.W_l(d)
+        # print(h.shape, d2.transpose(1, 2).shape)
+        s = torch.matmul(h, self.W_l(d).transpose(1, 2))
+        return s
+
+
+class RelationTagger(nn.Module):
+    def __init__(self, hidden_size, n_fields, max_position_embeddings, n_channels=2):
+        super().__init__()
+        self.n_channels = n_channels
+        self.n_fields = n_fields
+        self.max_position_embeddings = max_position_embeddings
+
+        # self.bias = nn.Parameter(
+        #     torch.ones(
+        #         1,
+        #         self.n_channels,
+        #         max_position_embeddings + n_fields,
+        #         max_position_embeddings,
+        #     )
+        # )
+
+        self.register_buffer(
+            "label_idx", torch.arange(0, self.n_fields, dtype=torch.long)
         )
-        s_1 = torch.cat(
-            [torch.einsum("bih,bjh->bij", h, W(d)).unsqueeze(0) for W in self.W_1]
+
+        self.label_embeddings = nn.ModuleList(
+            [nn.Embedding(n_fields, hidden_size) for _ in range(self.n_channels)]
         )
-        # es_0 = torch.exp(s_0)
-        # es_1 = torch.exp(s_1)
-        p = s_0 / (s_0 + s_1)
-        return p
+        self.key = nn.ModuleList(
+            [
+                nn.Linear(hidden_size, hidden_size, bias=False)
+                for _ in range(self.n_channels)
+            ]
+        )
+        self.query = nn.ModuleList(
+            [
+                (nn.Linear(hidden_size, hidden_size, bias=False))
+                for _ in range(self.n_channels)
+            ]
+        )
+
+    def forward(self, hidden):
+        # Input: batch * seq * hidden
+        bsize = hidden.shape[0]
+        label_embeddings = torch.cat(
+            [embed(self.label_idx).unsqueeze(0) for embed in self.label_embeddings],
+            dim=0,
+        )
+        label_embeddings = torch.repeat_interleave(
+            label_embeddings.unsqueeze(1), bsize, dim=1
+        )
+        key = torch.cat([key(hidden).unsqueeze(0) for key in self.key], dim=0)
+        query = torch.cat([query(hidden).unsqueeze(0) for query in self.query], dim=0)
+        query = torch.cat([query, label_embeddings], dim=2)
+        score = torch.einsum("cbih,cbjh->bcij", query, key)
+        # score = score + self.bias
+        return score
 
 
 def partially_from_pretrained(config, model_name, **kwargs):
@@ -131,7 +193,7 @@ def parse_input(
     token_boxes += [sep_token_box]
     actual_bboxes += [[0, 0, width, height]]
     token_actual_boxes += [[0, 0, width, height]]
-    are_box_first_tokens += [1]
+    are_box_first_tokens += [2]
 
     segment_ids = [0] * len(tokens)
 
@@ -141,7 +203,7 @@ def parse_input(
     actual_bboxes = [[0, 0, width, height]] + actual_bboxes
     token_actual_boxes = [[0, 0, width, height]] + token_actual_boxes
     segment_ids = [1] + segment_ids
-    are_box_first_tokens = [1] + are_box_first_tokens
+    are_box_first_tokens = [3] + are_box_first_tokens
 
     input_ids = tokenizer.convert_tokens_to_ids(tokens)
 
@@ -209,13 +271,17 @@ def parse_input(
         ],
         dim=2,
     )
-
     itc_labels = labels[0, :nfields, :].transpose(0, 1).argmax(dim=-1)
     stc_labels = labels[:, nfields:, :].transpose(1, 2)
 
     assert itc_labels.shape[0] == config.max_position_embeddings
     assert stc_labels.shape[1] == config.max_position_embeddings
     assert stc_labels.shape[2] == config.max_position_embeddings
+
+    # labels = torch.cat(
+    #     [torch.zeros(labels.shape[0], 1, config.max_position_embeddings), labels],
+    #     dim=1,
+    # )
 
     # The unsqueezed dim is the batch dim for each type
     return {
@@ -324,6 +390,8 @@ class LayoutLMSpade(nn.Module):
         super().__init__()
         self.config_bert = config_bert
         self.config_layoutlm = config_layoutlm
+        # layoutlm = config_layoutlm._name_or_path
+        # bert = bert._name_or_path
         self.n_classes = n_classes
         # self.backbone = partially_from_pretrained(config_bert, bert)
         self.backbone = hybrid_layoutlm(
@@ -352,26 +420,45 @@ class LayoutLMSpade(nn.Module):
         )
 
         # (2) Subsequent token classification
-        self.stc_layer = RelationTagger(
-            n_relations=2,
+        n_channels = 2
+        self.rel_s = RelationTagger(
             hidden_size=config_bert.hidden_size,
             n_fields=self.n_classes,
+            max_position_embeddings=config_bert.max_position_embeddings,
+            n_channels=n_channels,
         )
 
+        self.rel_g = RelationTagger(
+            hidden_size=config_bert.hidden_size,
+            n_fields=0,  # self.n_classes,
+            max_position_embeddings=config_bert.max_position_embeddings,
+            n_channels=n_channels,
+        )
+
+        # self.rel_s_conv = nn.Conv2d(n_channels, 2, 1, bias=False)
+        # self.rel_g_conv = nn.Conv2d(n_channels, 2, 1, bias=False)
+
         # Loss
-        self.loss_func = nn.CrossEntropyLoss()
+        self.loss_func = nn.CrossEntropyLoss(
+            reduction="mean", weight=torch.tensor([1, 0.1])
+        )
         # self.loss_func = nn.BCEWithLogitsLoss()
         self.itc_loss_func = nn.NLLLoss()
         self.act = nn.Sigmoid()
 
         # DEBUG
-        self.threshold = nn.Threshold(0.5, 0.0)
-        self.label_morph = nn.Linear(self.n_classes, 5)
-        self.graph_conv = nn.Sequential(
-            nn.Conv2d(2, 4, (3, 3), padding=1),
-            nn.Conv2d(4, 4, (5, 5), padding=3),
-            nn.Conv2d(4, 2, (3, 3), padding=1),
+        # self.threshold = nn.Threshold(0.5, 0.0)
+        # self.label_morph = nn.Linear(self.n_classes, 5)
+        # self.graph_conv = nn.Sequential(
+        #     nn.Conv2d(2, 4, (3, 3), padding=1),
+        #     nn.Conv2d(4, 4, (5, 5), padding=3),
+        #     nn.Conv2d(4, 2, (3, 3), padding=1),
+        # )
+        self.token_role_embeddings = nn.Embedding(2, config_bert.hidden_size)
+        self.backbone.embeddings.token_type_embeddings = nn.Embedding(
+            4, config_bert.hidden_size
         )
+        self.fill_value = 0
 
     def forward(self, batch):
         batch = BatchEncoding(batch)
@@ -379,20 +466,36 @@ class LayoutLMSpade(nn.Module):
             input_ids=batch.input_ids,
             bbox=batch.bbox,
             attention_mask=batch.attention_mask,
+            token_type_ids=batch.are_box_first_tokens,
         )
         last_hidden_state = outputs.last_hidden_state
-        rel = self.stc_layer(last_hidden_state)
-        itc_outputs = rel[
-            0, :, : self.n_classes, : self.config_bert.max_position_embeddings
-        ]
-        stc_outputs = rel[
-            :, :, self.n_classes :, : self.config_bert.max_position_embeddings
-        ]
-        # print("itc", itc_outputs.shape)
-        # print("stc", stc_outputs.shape)
 
-        loss = self._get_rel_loss(rel, batch)
-        return Namespace(rel=rel, loss=loss, attention_mask=batch.attention_mask)
+        rel_s = self.rel_s(last_hidden_state)
+        rel_g = self.rel_g(last_hidden_state)
+        # rel_s = self.rel_s_conv(rel_s)
+        # rel_g = self.rel_g_conv(rel_g)
+
+        loss_s = self._get_rel_loss_no_mask(
+            rel_s,
+            batch.labels[:, 0],  # batch.are_box_first_tokens
+        )
+        loss_g = self._get_rel_loss_no_mask(
+            rel_g,
+            batch.labels[:, 1, self.n_classes :, :],
+            # batch.are_box_first_tokens,
+            # n_classes=0,
+        )
+
+        with torch.no_grad():
+            true_rel_s = rel_s[:, 0:1]
+            true_rel_g = rel_g[:, 0:1]
+
+        # true_rel_g = torch.softmax(rel_g, dim=1)[:, 0:1]
+        return Namespace(
+            rel=[true_rel_s, true_rel_g],
+            loss=[loss_s, loss_g],
+            attention_mask=batch.attention_mask,
+        )
 
     #         out = SpadeOutput(
     #             itc_outputs=(itc_outputs),
@@ -402,11 +505,68 @@ class LayoutLMSpade(nn.Module):
     #         )
 
     #         return out
+    def _get_rel_loss_no_mask(self, rel, labels):
+        labels = labels.unsqueeze(1)
+        rel[:, 1] = 1 - rel[:, 1]
+        labels = torch.cat([labels, labels], dim=1)
+        return self.loss_func(rel, labels)
 
-    def _get_rel_loss(self, rel, batch):
-        # print(rel.shape, batch.labels.shape)
-        rel = rel.transpose(0, 1)
-        return self.loss_func(rel, batch.labels)
+    def _get_rel_loss(self, rel, labels, token_types, n_classes=None):
+        # Input: batch * 2 * node * node
+        # Input: batch * node * node
+        # token_types: batch * node
+        fill_value = self.fill_value
+        if n_classes is None:
+            n_classes = self.n_classes
+
+        # repeat channel on labels
+        labels = labels.unsqueeze(1)
+        labels = torch.cat([labels, 1 - labels], dim=1)
+        # print(labels.shape, rel.shape)
+
+        # Mask label part
+        mask_top = torch.zeros(
+            [1, 1, n_classes, self.config_bert.max_position_embeddings],
+            dtype=torch.bool,
+            device=rel.device,
+        )
+
+        # Mask diagonal
+        self_mask = torch.eye(rel.shape[-1], dtype=torch.bool, device=rel.device)
+        self_mask = self_mask.unsqueeze(0).unsqueeze(0)
+        self_mask = torch.cat([mask_top, self_mask], dim=2)
+        # print(self_mask.shape, rel.shape, labels.shape)
+        rel = rel.masked_fill(self_mask, fill_value)
+        labels = labels.masked_fill(self_mask, fill_value)
+
+        # Mask special tokens
+        # Orig size: batch * seq
+        special_mask = token_types > 1
+        special_mask = special_mask.unsqueeze(1).unsqueeze(-1)
+        special_mask = special_mask * special_mask.transpose(-1, -2)
+        mask_top = torch.zeros(
+            [
+                special_mask.shape[0],
+                1,
+                n_classes,
+                self.config_bert.max_position_embeddings,
+            ],
+            dtype=torch.bool,
+            device=rel.device,
+        )
+        special_mask = torch.cat([mask_top, special_mask], dim=2)
+        rel = rel.masked_fill(special_mask, fill_value)
+        labels = labels.masked_fill(special_mask, fill_value)
+
+        # labels = torch.broadcast_to(labels, rel.shape)
+
+        # broadcast_to(labels, rel.shape)
+        # labels = torch.cat(
+        #     [labels, torch.ones_like(labels, device=labels.device)],  #! line break
+        #     dim=1,
+        # )
+
+        return self.loss_func(rel, labels)
 
     # def forward(self, batch):
     #     if "text_tokens" in batch:
@@ -450,7 +610,7 @@ class LayoutLMSpade(nn.Module):
         return itc_loss, stc_loss
 
     def _get_itc_loss(self, itc_outputs, batch):
-        itc_mask = batch["are_box_first_tokens"]
+        itc_mask = batch.attention_mask
         inv_mask = (1 - itc_mask).bool()
         itc_outputs = itc_outputs.masked_fill(inv_mask.unsqueeze(-1), -1.0)
         itc_outputs = itc_outputs.transpose(-1, -2)

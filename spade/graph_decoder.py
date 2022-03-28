@@ -38,15 +38,18 @@ def parse_graph(score, texts, fields, strict=True):
     rel_s, rel_g = score[0], score[1]
     ntexts = len(texts)
     nfields = len(fields)
+    threshold = 0.5
 
     #  Label to text and Text 2 text
-    rel_s_l2t, rel_s_t2t = rel_s[0:nfields, :], rel_s[nfields:, :]
-    rel_g_l2t, rel_g_t2t = rel_s[0:nfields, :], rel_g[nfields:, :]
+    rel_s_l2t, rel_s_t2t = rel_s[0:nfields, :], rel_s[nfields:, :] > threshold
+    rel_g_l2t, rel_g_t2t = rel_s[0:nfields, :], rel_g[nfields:, :] > threshold
 
     # Link node type to representing nodes
     node_types = {}
-    for (i, j) in zip(*np.where(rel_s_l2t)):
-        node_types[j] = i
+    for j in range(ntexts):
+        i = np.argmax(rel_s_l2t[:, j])
+        if rel_s_t2t[i, j] > -99:
+            node_types[j] = i
 
     # Link label to the nodes following the representing nodes
     starts = node_types.keys()
@@ -121,9 +124,10 @@ def parse_graph(score, texts, fields, strict=True):
 
     for group in groups:
         try:
-            aux_results.append([(texts[i], aux(i)) for i in group])
-        except Exception:
+            aux_results.append(" ".join([texts[i] for i in group]))
+        except Exception as e:
             pass
+    return aux_results
 
     # Prettified results
     for result in aux_results:

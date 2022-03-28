@@ -7,6 +7,7 @@ from . import data
 import torch
 import json
 from argparse import Namespace
+import numpy as np
 
 
 class Transpose(nn.Module):
@@ -20,37 +21,24 @@ class Transpose(nn.Module):
 
 
 class RelationTagger(nn.Module):
-    def __init__(self, n_relations, hidden_size, n_fields):
+    def __init__(
+        self,
+        n_relations,
+        backbone_hidden_size,
+        head_hidden_size,
+        head_p_dropout=0.1,
+    ):
         super().__init__()
-        self.n_relations = n_relations
-        self.n_fields = n_fields
-        self.label_embeds = nn.Embedding(n_fields, hidden_size)
+        hidden_size = backbone_hidden_size
         self.W_h = nn.Linear(hidden_size, hidden_size)
         self.W_d = nn.Linear(hidden_size, hidden_size)
-        self.W_0 = nn.ModuleList(
-            [nn.Linear(hidden_size, hidden_size) for i in range(n_relations)]
-        )
-        self.W_1 = nn.ModuleList(
-            [nn.Linear(hidden_size, hidden_size) for i in range(n_relations)]
-        )
+        self.W_0 = nn.Linear(hidden_size, hidden_size)
 
     def forward(self, hidden):
-        idx = torch.arange(0, self.n_fields, device=hidden.device)
-        u = self.label_embeds(idx).unsqueeze(0)
-        u = torch.repeat_interleave(u, hidden.shape[0], dim=0)
-        v = self.W_h(hidden)
-        d = self.W_d(v)
-        h = torch.cat([u, v], dim=1)
-        s_0 = torch.cat(
-            [torch.einsum("bih,bjh->bij", h, W(d)).unsqueeze(0) for W in self.W_0]
-        )
-        s_1 = torch.cat(
-            [torch.einsum("bih,bjh->bij", h, W(d)).unsqueeze(0) for W in self.W_1]
-        )
-        # es_0 = torch.exp(s_0)
-        # es_1 = torch.exp(s_1)
-        p = s_0 / (s_0 + s_1)
-        return p
+        h = self.W_h(hidden)
+        d = self.W_d(hidden)
+        score = torch.einsum("bih,bjh->bij", h, self.W_0(d)).unsqueeze(0)
+        return score
 
 
 def partially_from_pretrained(config, model_name, **kwargs):
@@ -81,6 +69,38 @@ def poly_to_box(poly):
     return [min(x), min(y), max(x), max(y)]
 
 
+class AttrDict(dict):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.__dict__ = self
+
+
+def gen_classifier_label(rel, text_tokens, fields, coords, tokenizer, texts):
+    rel_tokens = data.expand_rel_s(rel, tokenizer, texts, coords, fields)
+
+    classification = [None for _ in text_tokens]
+    for (i, j) in zip(*np.where(rel_tokens)):
+        if i < len(fields):
+            classification[j] = i
+
+    for _ in text_tokens:
+        for (i, j) in zip(*np.where(rel_tokens)):
+            i = i - len(fields)
+            if i < 0:
+                continue
+            if classification[i] is not None:
+                classification[j] = classification[i]
+
+    other_label = len(fields)
+    special_label = len(fields) + 1
+    classification = [other_label if l is None else l for l in classification]
+    return AttrDict(
+        other_label=other_label,
+        special_label=special_label,
+        classification=classification,
+    )
+
+
 def parse_input(
     image,
     words,
@@ -108,23 +128,23 @@ def parse_input(
         actual_bboxes.extend([actual_bbox] * len(word_tokens))
         token_actual_boxes.extend([actual_bbox] * len(word_tokens))
         are_box_first_tokens.extend([1] + [0] * (len(word_tokens) - 1))
+    classifier_label = gen_classifier_label(
+        label[0], tokens, fields, token_actual_boxes, tokenizer, words
+    )
+    other_label = classifier_label.other_label
+    special_label = classifier_label.other_label
+    classification = classifier_label.classification
 
     # Truncation: account for [CLS] and [SEP] with "- 2".
     special_tokens_count = 2
-    if len(tokens) > config.max_position_embeddings - special_tokens_count:
-        tokens = tokens[: (config.max_position_embeddings - special_tokens_count)]
-        token_boxes = token_boxes[
-            : (config.max_position_embeddings - special_tokens_count)
-        ]
-        actual_bboxes = actual_bboxes[
-            : (config.max_position_embeddings - special_tokens_count)
-        ]
-        token_actual_boxes = token_actual_boxes[
-            : (config.max_position_embeddings - special_tokens_count)
-        ]
-        are_box_first_tokens = are_box_first_tokens[
-            : (config.max_position_embeddings - special_tokens_count)
-        ]
+    real_max_len = config.max_position_embeddings - special_tokens_count
+    if len(tokens) > real_max_len:
+        tokens = tokens[:real_max_len]
+        token_boxes = token_boxes[:real_max_len]
+        actual_bboxes = actual_bboxes[:real_max_len]
+        token_actual_boxes = token_actual_boxes[:real_max_len]
+        are_box_first_tokens = are_box_first_tokens[:real_max_len]
+        classification = classification[:real_max_len]
 
     # add [SEP] token, with corresponding token boxes and actual boxes
     tokens += [tokenizer.sep_token]
@@ -132,6 +152,7 @@ def parse_input(
     actual_bboxes += [[0, 0, width, height]]
     token_actual_boxes += [[0, 0, width, height]]
     are_box_first_tokens += [1]
+    classification += [special_label]
 
     segment_ids = [0] * len(tokens)
 
@@ -141,7 +162,8 @@ def parse_input(
     actual_bboxes = [[0, 0, width, height]] + actual_bboxes
     token_actual_boxes = [[0, 0, width, height]] + token_actual_boxes
     segment_ids = [1] + segment_ids
-    are_box_first_tokens = [1] + are_box_first_tokens
+    are_box_first_tokens = [2] + are_box_first_tokens
+    classification = [special_label] + classification
 
     input_ids = tokenizer.convert_tokens_to_ids(tokens)
 
@@ -156,7 +178,9 @@ def parse_input(
     segment_ids += [tokenizer.pad_token_id] * padding_length
     token_boxes += [pad_token_box] * padding_length
     token_actual_boxes += [pad_token_box] * padding_length
-    are_box_first_tokens += [0] * padding_length
+    are_box_first_tokens += [3] * padding_length
+    classification += [special_label] * padding_length
+    # print(len(classification), len(input_ids))
 
     assert len(input_ids) == config.max_position_embeddings
     assert len(input_mask) == config.max_position_embeddings
@@ -164,58 +188,59 @@ def parse_input(
     assert len(token_boxes) == config.max_position_embeddings
     assert len(token_actual_boxes) == config.max_position_embeddings
     assert len(are_box_first_tokens) == config.max_position_embeddings
+    assert len(classification) == config.max_position_embeddings
 
     # Label parsing
-    labels = [
-        data.expand_rel_s(
-            score=label[0],
-            tokenizer=tokenizer,
-            coords=boxes,
-            texts=words,
-            labels=fields,
-        ),
-        data.expand_rel_g(
-            score=label[1],
-            tokenizer=tokenizer,
-            coords=boxes,
-            texts=words,
-            labels=fields,
-        ),
-    ]
-    labels = torch.tensor(labels)
+    #     labels = [
+    #         data.expand_rel_s(
+    #             score=label[0],
+    #             tokenizer=tokenizer,
+    #             coords=boxes,
+    #             texts=words,
+    #             labels=fields,
+    #         ),
+    #         data.expand_rel_g(
+    #             score=label[1],
+    #             tokenizer=tokenizer,
+    #             coords=boxes,
+    #             texts=words,
+    #             labels=fields,
+    #         ),
+    #     ]
+    #     labels = torch.tensor(labels)
 
-    nfields = len(fields)
-    npos = config.max_position_embeddings
-    labels = labels[:, :npos, : (npos - nfields)]
-    b, nnodes, nwords = labels.shape
-    # b * (nl + nt) * nt
-    # -> b * (nl + nt + padding_length) * (nl + nt + padding_length)
-    # + 2 because special tokens
-    labels = torch.cat(
-        [
-            labels,
-            torch.zeros(b, config.max_position_embeddings - nnodes + nfields, nwords),
-        ],
-        dim=1,
-    )
-    labels = torch.cat(
-        [
-            labels,
-            torch.zeros(
-                b,
-                config.max_position_embeddings + nfields,
-                config.max_position_embeddings - nwords,
-            ),
-        ],
-        dim=2,
-    )
+    #     nfields = len(fields)
+    #     npos = config.max_position_embeddings
+    #     labels = labels[:, :npos, : (npos - nfields)]
+    #     b, nnodes, nwords = labels.shape
+    #     # b * (nl + nt) * nt
+    #     # -> b * (nl + nt + padding_length) * (nl + nt + padding_length)
+    #     # + 2 because special tokens
+    #     labels = torch.cat(
+    #         [
+    #             labels,
+    #             torch.zeros(b, config.max_position_embeddings - nnodes + nfields, nwords),
+    #         ],
+    #         dim=1,
+    #     )
+    #     labels = torch.cat(
+    #         [
+    #             labels,
+    #             torch.zeros(
+    #                 b,
+    #                 config.max_position_embeddings + nfields,
+    #                 config.max_position_embeddings - nwords,
+    #             ),
+    #         ],
+    #         dim=2,
+    #     )
 
-    itc_labels = labels[0, :nfields, :].transpose(0, 1).argmax(dim=-1)
-    stc_labels = labels[:, nfields:, :].transpose(1, 2)
+    #     itc_labels = labels[0, :nfields, :].transpose(0, 1).argmax(dim=-1)
+    #     stc_labels = labels[:, nfields:, :].transpose(1, 2)
 
-    assert itc_labels.shape[0] == config.max_position_embeddings
-    assert stc_labels.shape[1] == config.max_position_embeddings
-    assert stc_labels.shape[2] == config.max_position_embeddings
+    #     assert itc_labels.shape[0] == config.max_position_embeddings
+    #     assert stc_labels.shape[1] == config.max_position_embeddings
+    #     assert stc_labels.shape[2] == config.max_position_embeddings
 
     # The unsqueezed dim is the batch dim for each type
     return {
@@ -225,9 +250,9 @@ def parse_input(
         "token_type_ids": torch.tensor(segment_ids).unsqueeze(0),
         "bbox": torch.tensor(token_boxes).unsqueeze(0),
         "actual_bbox": torch.tensor(token_actual_boxes).unsqueeze(0),
-        "itc_labels": itc_labels.unsqueeze(0),
-        "stc_labels": stc_labels.unsqueeze(0),
-        "labels": torch.tensor(labels).unsqueeze(0),
+        "itc_labels": torch.tensor(classification).unsqueeze(0),
+        # "stc_labels": stc_labels.unsqueeze(0),
+        # "labels": torch.tensor(labels).unsqueeze(0),
         "are_box_first_tokens": torch.tensor(are_box_first_tokens).unsqueeze(0),
     }
 
@@ -302,6 +327,48 @@ class RelationExtractor(nn.Module):
         return relation_score
 
 
+class RelationExtractor(nn.Module):
+    def __init__(
+        self,
+        n_relations,
+        backbone_hidden_size,
+        head_hidden_size,
+        head_p_dropout=0.1,
+    ):
+        super().__init__()
+
+        self.n_relations = n_relations
+        self.backbone_hidden_size = backbone_hidden_size
+        self.head_hidden_size = head_hidden_size
+        self.head_p_dropout = head_p_dropout
+
+        self.drop = nn.Dropout(head_p_dropout)
+        self.q_net = nn.Linear(
+            self.backbone_hidden_size, self.n_relations * self.head_hidden_size
+        )
+
+        self.k_net = nn.Linear(
+            self.backbone_hidden_size, self.n_relations * self.head_hidden_size
+        )
+
+        self.dummy_node = nn.Parameter(torch.Tensor(1, self.backbone_hidden_size))
+        nn.init.normal_(self.dummy_node)
+
+    def forward(self, h_q, h_k):
+        h_q = self.q_net(self.drop(h_q))
+
+        # dummy_vec = self.dummy_node.unsqueeze(0).repeat(1, h_k.size(1), 1)
+        # h_k = torch.cat([h_k, dummy_vec], axis=0)
+        h_k = self.k_net(self.drop(h_k))
+
+        head_q = h_q.view(h_q.size(0), h_q.size(1), self.head_hidden_size)
+        head_k = h_k.view(h_k.size(0), h_k.size(1), self.head_hidden_size)
+
+        relation_score = torch.einsum("ibd,jbd->bij", (head_q, head_k))
+
+        return relation_score
+
+
 @dataclass
 class SpadeOutput:
     itc_outputs: torch.Tensor
@@ -311,9 +378,13 @@ class SpadeOutput:
 
 
 def hybrid_layoutlm(config_layoutlm, config_bert, layoutlm, bert, **kwargs):
-    bert = partially_from_pretrained(config_bert, bert, **kwargs)
+    if layoutlm == bert:
+        return AutoModel.from_pretrained(layoutlm, **kwargs)
+
     layoutlm = partially_from_pretrained(config_layoutlm, layoutlm, **kwargs)
+    bert = partially_from_pretrained(config_bert, bert, **kwargs)
     layoutlm.embeddings.word_embeddings = bert.embeddings.word_embeddings
+    layoutlm.embeddings.position_embeddings = bert.embeddings.position_embeddings
     return layoutlm
 
 
@@ -322,13 +393,18 @@ class LayoutLMSpade(nn.Module):
         self, config_layoutlm, config_bert, layoutlm, bert, n_classes, fields, **kwargs
     ):
         super().__init__()
+        self.fill_value = -1.0
         self.config_bert = config_bert
         self.config_layoutlm = config_layoutlm
+        n_classes = n_classes + 2
         self.n_classes = n_classes
         # self.backbone = partially_from_pretrained(config_bert, bert)
         self.backbone = hybrid_layoutlm(
             config_layoutlm, config_bert, layoutlm, bert, **kwargs
         )
+        # self.backbone.embeddings.token_type_embeddings = nn.Embedding(
+        #     4, config_bert.hidden_size
+        # )
 
         # Map field to groups
         field_groups = [f.split(".")[0] for f in fields]
@@ -343,27 +419,50 @@ class LayoutLMSpade(nn.Module):
         hidden_dropout_prob = config_bert.hidden_dropout_prob
         self.itc_layer = nn.Sequential(
             # Transpose(-1, -2),
-            nn.BatchNorm1d(config_bert.max_position_embeddings),
+            # nn.BatchNorm1d(config_bert.max_position_embeddings),
             # Transpose(-1, -2),
-            # nn.Dropout(hidden_dropout_prob),
-            # nn.Linear(config_bert.hidden_size, config_bert.hidden_size),
+            nn.Dropout(hidden_dropout_prob),
+            nn.Linear(config_bert.hidden_size, config_bert.hidden_size),
             nn.Dropout(hidden_dropout_prob),
             nn.Linear(config_bert.hidden_size, n_classes),
+            # nn.Sigmoid(),
         )
 
         # (2) Subsequent token classification
-        self.stc_layer = RelationExtractor(
-            n_relations=2,
+        self.stc_layer_1 = RelationTagger(
+            n_relations=1,
+            backbone_hidden_size=config_bert.hidden_size,
+            head_hidden_size=config_bert.hidden_size,
+            head_p_dropout=hidden_dropout_prob,
+        )
+        self.stc_layer_2 = RelationTagger(
+            n_relations=1,
             backbone_hidden_size=config_bert.hidden_size,
             head_hidden_size=config_bert.hidden_size,
             head_p_dropout=hidden_dropout_prob,
         )
 
-        # Loss
-        self.loss_func = nn.CrossEntropyLoss()
-        # self.loss_func = nn.BCEWithLogitsLoss()
-        self.itc_loss_func = nn.NLLLoss()
-        self.act = nn.Sigmoid()
+        self.group_layer_1 = RelationTagger(
+            n_relations=1,
+            backbone_hidden_size=config_bert.hidden_size,
+            head_hidden_size=config_bert.hidden_size,
+            head_p_dropout=hidden_dropout_prob,
+        )
+        self.group_layer_2 = RelationTagger(
+            n_relations=1,
+            backbone_hidden_size=config_bert.hidden_size,
+            head_hidden_size=config_bert.hidden_size,
+            head_p_dropout=hidden_dropout_prob,
+        )
+
+        hidden_size = config_bert.hidden_size
+        self.token_role_embeds = nn.Sequential(
+            nn.Embedding(2, hidden_size),
+            # nn.Linear(hidden_size, hidden_size),
+            # nn.ReLU(),
+            # nn.Linear(hidden_size, hidden_size),
+            # nn.Sigmoid(),
+        )
 
         # DEBUG
         self.threshold = nn.Threshold(0.5, 0.0)
@@ -373,6 +472,13 @@ class LayoutLMSpade(nn.Module):
             nn.Conv2d(4, 4, (5, 5), padding=3),
             nn.Conv2d(4, 2, (3, 3), padding=1),
         )
+        self.loss_weight = torch.tensor([0.1, 1.0], dtype=torch.float32)
+
+        # Loss
+        self.loss_func = nn.CrossEntropyLoss(weight=self.loss_weight)
+        self.loss_func = nn.CrossEntropyLoss()
+        # self.loss_func = nn.BCEWithLogitsLoss()
+        self.itc_loss_func = nn.NLLLoss()
 
     def _get_rel_loss(self, rel, batch):
         # print(rel.shape, batch.labels.shape)
@@ -388,15 +494,35 @@ class LayoutLMSpade(nn.Module):
             input_ids=batch.input_ids,
             bbox=batch.bbox,
             attention_mask=batch.attention_mask,
+            # token_type_ids=batch.are_box_first_tokens,
         )  # , token_type_ids=token_type_ids)
+        # token_role = self.token_role_embeds(batch.are_box_first_tokens)
         last_hidden_state = outputs.last_hidden_state
         # print(last_hidden_state.shape)
         # last_hidden_state = last_hidden_state.transpose(-1, -2).contiguous()
         itc_outputs = self.itc_layer(last_hidden_state)  # .transpose(0, 1).contiguous()
-        itc_outputs = self.act(itc_outputs)
+        # itc_outputs = self.act(itc_outputs)
         # print(itc_outputs.shape)
-        last_hidden_state = last_hidden_state.transpose(0, 1).contiguous()
-        stc_outputs = self.stc_layer(last_hidden_state, last_hidden_state).squeeze(0)
+        # lhs_1 = last_hidden_state * token_role
+        # lhs_2 = last_hidden_state * (1 - token_role)
+        # lhs_1 = lhs_1.transpose(0, 1).contiguous()
+        # lhs_2 = lhs_2.transpose(0, 1).contiguous()
+        # rel_s_0 = self.stc_layer_1(last_hidden_state)
+        # rel_s_1 = self.stc_layer_2(last_hidden_state)
+        # rel_g_0 = self.group_layer_1(last_hidden_state)
+        # rel_g_1 = self.group_layer_2(last_hidden_state)
+        # relations = torch.cat([rel_s_0, rel_s_1, rel_g_0, rel_g_1], dim=0)
+
+        loss = self._get_itc_loss(itc_outputs, batch)
+        # loss = self._get_loss(itc_outputs, relations, batch)
+        # stc_outputs = torch.cat(
+        #     [
+        #         rel_s_1,
+        #         rel_g_1,
+        #     ],
+        #     dim=0,
+        # )
+        # print(stc_outputs.shape)
         # stc_outputs = self.threshold(stc_outputs)
         # itc_outputs = self.threshold(itc_outputs)
         # itc_labels = batch.itc_labels
@@ -404,26 +530,34 @@ class LayoutLMSpade(nn.Module):
         # batch.itc_labels = self.label_morph(batch.itc_labels)
         out = SpadeOutput(
             itc_outputs=(itc_outputs),
-            stc_outputs=(stc_outputs),
+            stc_outputs=None,
+            # stc_outputs=(stc_outputs),
             attention_mask=batch.attention_mask,
-            loss=self._get_loss(itc_outputs, stc_outputs, batch),
+            loss=[loss],
         )
         return out
 
-    def _get_loss(self, itc_outputs, stc_outputs, batch):
-        itc_loss = self._get_itc_loss(itc_outputs, batch)
-        stc_loss = self._get_stc_loss(stc_outputs, batch)
+    def _get_loss(self, itc_outputs, relations, batch):
+        stc_labels = batch.stc_labels.transpose(0, 1)
+        losses = [
+            self._get_itc_loss(itc_outputs, batch),
+            self._relation_loss(relations[:2], stc_labels, batch.are_box_first_tokens),
+            self._relation_loss(relations[2:], stc_labels, batch.are_box_first_tokens),
+        ]
+
+        # stc_loss = self._get_stc_loss(stc_outputs, batch)
         # print("itc_loss", itc_loss.item(), torch.norm(itc_loss))
         # print("stc_loss", stc_loss.item(), torch.norm(stc_loss))
         # loss = itc_loss + stc_loss
         # loss =
 
-        return itc_loss, stc_loss
+        return losses
 
     def _get_itc_loss(self, itc_outputs, batch):
-        itc_mask = batch["are_box_first_tokens"]
-        inv_mask = (1 - itc_mask).bool()
-        itc_outputs = itc_outputs.masked_fill(inv_mask.unsqueeze(-1), -1.0)
+        inv_mask = batch.are_box_first_tokens != 1
+        # ignore_index = torch.where(inv_mask)[0]
+        # inv_mask = (1 - itc_mask).bool()
+        itc_outputs = itc_outputs.masked_fill(inv_mask.unsqueeze(-1), self.fill_value)
         itc_outputs = itc_outputs.transpose(-1, -2)
         labels = batch.itc_labels
 
@@ -477,6 +611,45 @@ class LayoutLMSpade(nn.Module):
     # return sum(loss)
     # return sum([self.loss_func(stc_outputs[:, i, :, :], batch.stc_labels[:, i, :, :])
     #             for i in range(2)])
+    def _relation_loss(self, rel, labels, token_types):
+        # Input: batch * 2 * node * node
+        # Input: batch * node * node
+        # token_types: batch * node
+        fill_value = self.fill_value
+
+        # Mask diagonal
+        self_mask = torch.eye(rel.shape[-1], dtype=torch.bool, device=rel.device)
+        self_mask = self_mask.unsqueeze(0).unsqueeze(0)
+        rel = rel.masked_fill(self_mask, fill_value)
+        labels = labels.masked_fill(self_mask, fill_value)
+
+        # Mask special tokens
+        special_mask = token_types > 1
+        special_mask = special_mask.unsqueeze(0)
+        rel = rel.masked_fill(special_mask.unsqueeze(-1), fill_value)
+        rel = rel.masked_fill(special_mask.unsqueeze(-2), fill_value)
+        labels = labels.masked_fill(special_mask.unsqueeze(-1), fill_value)
+        labels = labels.masked_fill(special_mask.unsqueeze(-2), fill_value)
+
+        # Broadcast labels to 2 channel
+        # Convert to bcnn
+        rel = rel.transpose(0, 1)
+        labels = labels.transpose(0, 1)
+        # labels = torch.broadcast_to(labels.unsqueeze(1), rel.shape)
+
+        # print(labels.shape, rel.shape)
+        # Cross entropy batch * channel * w * h
+        # where channel is 1 for single relation loss
+        # Scratch that
+        # Batch * 1 * node * node returns 0
+        # Batch * node * node returns giantic loss
+
+        # Using the fact that only
+        # each node has only one incoming node
+        # bsize = rel.shape[0]
+        # labels = labels.view((bsize, -1))
+        # rel = rel.view((bsize, -1))
+        return self.loss_func(rel, labels)
 
     def _get_stc_loss(self, stc_outputs, batch):
         invalid_token_mask = 1 - batch["attention_mask"]
