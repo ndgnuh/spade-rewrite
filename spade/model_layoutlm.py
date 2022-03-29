@@ -1,12 +1,31 @@
+import numpy as np
 from torch import nn
 from transformers import AutoModel, AutoTokenizer, BatchEncoding
 from torch.utils.data import Dataset, DataLoader
 from dataclasses import dataclass
 from typing import Optional
-from . import data
+from . import graph_stuff as G
 import torch
 import json
 from argparse import Namespace
+
+
+def batch_consine_sim(batch):
+    score = torch.einsum("bih,bjh->bij", batch, batch)
+    inv_norm = 1 / torch.norm(batch, dim=-1)
+    return torch.einsum("bij,bi,bj->bij", score, inv_norm, inv_norm)
+
+
+def tensorize(x):
+    return torch.as_tensor(np.array(x))
+
+
+def true_length(mask):
+    batch = len(mask.shape) == 2
+    if batch:
+        return [true_length(m) for m in mask]
+
+    return torch.where(mask == 1)[-1][-1]
 
 
 class Transpose(nn.Module):
@@ -19,46 +38,35 @@ class Transpose(nn.Module):
         return x.transpose(self.dim_a, self.dim_b)
 
 
-class RelationTaggerOld(nn.Module):
-    def __init__(self, hidden_size, n_fields):
+class PlainRelationTagger(nn.Module):
+    def __init__(self, n_fields, hidden_size, head_p_dropout=0.1):
         super().__init__()
-        self.n_channels = 2
-        self.n_fields = n_fields
-        self.bias = nn.Parameter(
-            torch.ones(1, self.n_channels, hidden_size, hidden_size)
-        )
-        self.label_idx = torch.arange(0, self.n_fields, dtype=torch.long)
-        self.label_idx = torch.arange(0, self.n_fields, dtype=torch.long)
-        self.label_idx.require_grad = False
-        self.register_buffer("label_idx", self.label_idx)
-        self.label_embeddings = nn.ModuleList(
-            [nn.Embedding(n_fields, hidden_size) for _ in range(self.n_channels)]
-        )
-        self.key = nn.ModuleList(
-            [nn.Linear(hidden_size, hidden_size) for _ in range(self.n_channels)]
-        )
-        self.query = nn.ModuleList(
-            [nn.Linear(hidden_size, hidden_size) for _ in range(self.n_channels)]
-        )
-        self.value = nn.ModuleList(
-            [nn.Linear(hidden_size, hidden_size) for _ in range(self.n_channels)]
-        )
+        self.head = nn.Linear(hidden_size, hidden_size)
+        self.tail = nn.Linear(hidden_size, hidden_size)
+        self.field_embeddings = nn.Parameter(torch.rand(1, n_fields, hidden_size))
+        self.W_label_0 = nn.Linear(hidden_size, hidden_size, bias=False)
+        self.W_label_1 = nn.Linear(hidden_size, hidden_size, bias=False)
 
-    def forward(self, hidden):
-        idx = self.label_idx
-        label_embeddings = torch.cat(
-            [embed(idx).unsqueeze(0) for embed in self.label_embeddings], dim=0
+    def forward(self, enc, true_len):
+
+        enc_head = self.head(enc)
+        enc_tail = self.tail(enc)
+
+        batch_size = enc_tail.size(0)
+        field_embeddings = self.field_embeddings.expand(batch_size, -1, -1)
+        enc_head = torch.cat([field_embeddings, enc_head], dim=1)
+
+        score_0 = torch.matmul(enc_head, self.W_label_0(enc_tail).transpose(1, 2))
+        score_1 = torch.matmul(enc_head, self.W_label_1(enc_tail).transpose(1, 2))
+
+        score = torch.cat(
+            [
+                score_0.unsqueeze(1),
+                score_1.unsqueeze(1),
+            ],
+            dim=1,
         )
-        label_embeddings = torch.repeat_interleave(
-            label_embeddings, hidden.shape[0], dim=0
-        )
-        v = self.W_h(hidden)
-        d = self.W_d(hidden)
-        h = torch.cat([u, v], dim=1)
-        d2 = self.W_l(d)
-        # print(h.shape, d2.transpose(1, 2).shape)
-        s = torch.matmul(h, self.W_l(d).transpose(1, 2))
-        return s
+        return score
 
 
 class RelationTagger(nn.Module):
@@ -67,22 +75,20 @@ class RelationTagger(nn.Module):
         self.n_channels = n_channels
         self.n_fields = n_fields
         self.max_position_embeddings = max_position_embeddings
-
-        # self.bias = nn.Parameter(
-        #     torch.ones(
-        #         1,
-        #         self.n_channels,
-        #         max_position_embeddings + n_fields,
-        #         max_position_embeddings,
-        #     )
-        # )
+        self.threshold = nn.Parameter(torch.rand(1))
 
         self.register_buffer(
             "label_idx", torch.arange(0, self.n_fields, dtype=torch.long)
         )
 
         self.label_embeddings = nn.ModuleList(
-            [nn.Embedding(n_fields, hidden_size) for _ in range(self.n_channels)]
+            [
+                nn.Embedding(
+                    n_fields,
+                    hidden_size,
+                )
+                for _ in range(self.n_channels)
+            ]
         )
         self.key = nn.ModuleList(
             [
@@ -93,6 +99,12 @@ class RelationTagger(nn.Module):
         self.query = nn.ModuleList(
             [
                 (nn.Linear(hidden_size, hidden_size, bias=False))
+                for _ in range(self.n_channels)
+            ]
+        )
+        self.value = nn.ModuleList(
+            [
+                nn.Linear(hidden_size, hidden_size, bias=False)
                 for _ in range(self.n_channels)
             ]
         )
@@ -109,9 +121,10 @@ class RelationTagger(nn.Module):
         )
         key = torch.cat([key(hidden).unsqueeze(0) for key in self.key], dim=0)
         query = torch.cat([query(hidden).unsqueeze(0) for query in self.query], dim=0)
+        value = torch.cat([value(hidden).unsqueeze(0) for value in self.value])
         query = torch.cat([query, label_embeddings], dim=2)
-        score = torch.einsum("cbih,cbjh->bcij", query, key)
-        # score = score + self.bias
+        attention = torch.einsum("cbih,cbjh->bcij", query, key)
+        score = torch.einsum("cbih,bcji->bcji", value, attention)
         return score
 
 
@@ -143,6 +156,121 @@ def poly_to_box(poly):
     return [min(x), min(y), max(x), max(y)]
 
 
+def parse_input_no_token(
+    image,
+    texts,
+    actual_bboxes,
+    tokenizer,
+    config,
+    label,
+    fields,
+    cls_token_box=[0, 0, 0, 0],
+    sep_token_box=[1000, 1000, 1000, 1000],
+    pad_token_box=[0, 0, 0, 0],
+):
+    width, height = image.size
+    token_boxes = [normalize_box(b, width, height) for b in actual_bboxes]
+    tokens = texts
+    are_box_first_tokens = [True for _ in token_boxes]
+    label = tensorize(label)
+    label_mask = torch.ones_like(label)
+
+    # Truncation: account for [CLS] and [SEP] with "- 2".
+    special_tokens_count = 2
+    true_length = config.max_position_embeddings - special_tokens_count
+    if len(tokens) > true_length:
+        tokens = tokens[:true_length]
+        token_boxes = token_boxes[:true_length]
+        actual_bboxes = actual_bboxes[:true_length]
+        are_box_first_tokens = are_box_first_tokens[:true_length]
+        label = label[:, : (len(fields) + true_length), :true_length]
+        label_mask = label_mask[:, : (len(fields) + true_length), :true_length]
+
+    # add [SEP] token, with corresponding token boxes and actual boxes
+    tokens += [tokenizer.sep_token]
+    token_boxes += [sep_token_box]
+    actual_bboxes += [[0, 0, width, height]]
+    are_box_first_tokens += [0]
+    segment_ids = [0] * len(tokens)
+    # use labels for auxilary result
+    n, i, j = label.shape
+    labels = torch.zeros((n, i + 1, j + 1), dtype=label.dtype)
+    labels[:, :i, :j] = label
+    label = labels
+    n, i, j = label_mask.shape
+    label_masks = torch.zeros((n, i + 1, j + 1), dtype=label_mask.dtype)
+    label_masks[:, :i, :j] = label_mask
+    label_mask = label_masks
+
+    # next: [CLS] token
+    tokens = [tokenizer.cls_token] + tokens
+    token_boxes = [cls_token_box] + token_boxes
+    actual_bboxes = [[0, 0, width, height]] + actual_bboxes
+    segment_ids = [1] + segment_ids
+    are_box_first_tokens = [0] + are_box_first_tokens
+    n, i, j = label.shape
+    labels = torch.zeros(n, i + 1, j + 1, dtype=label.dtype)
+    labels[:, 1:, 1:] = label
+    label = labels
+    n, i, j = label_mask.shape
+    label_masks = torch.zeros(n, i + 1, j + 1, dtype=label_mask.dtype)
+    label_masks[:, 1:, 1:] = label_mask
+    label_mask = label_masks
+
+    input_ids = tokenizer.convert_tokens_to_ids(tokens)
+
+    # The mask has 1 for real tokens and 0 for padding tokens. Only real
+    # tokens are attended to.
+    input_mask = [1] * len(input_ids)
+
+    # Zero-pad up to the sequence length.
+    padding_length = config.max_position_embeddings - len(input_ids)
+    input_ids += [tokenizer.pad_token_id] * padding_length
+    input_mask += [0] * padding_length
+    segment_ids += [tokenizer.pad_token_id] * padding_length
+    token_boxes += [pad_token_box] * padding_length
+    are_box_first_tokens += [0] * padding_length
+    n, i, j = label.shape
+    labels = torch.zeros(
+        n,
+        config.max_position_embeddings + len(fields),
+        config.max_position_embeddings,
+        dtype=label.dtype,
+    )
+    labels[:, :i, :j] = label
+    label = labels
+
+    n, i, j = label_mask.shape
+    label_masks = torch.zeros(
+        n,
+        config.max_position_embeddings + len(fields),
+        config.max_position_embeddings,
+        dtype=label_mask.dtype,
+    )
+    label_masks[:, :i, :j] = label_mask
+    label_mask = label_masks
+
+    assert len(input_ids) == config.max_position_embeddings
+    assert len(input_mask) == config.max_position_embeddings
+    assert len(segment_ids) == config.max_position_embeddings
+    assert len(token_boxes) == config.max_position_embeddings
+    assert len(are_box_first_tokens) == config.max_position_embeddings
+
+    #
+
+    # The unsqueezed dim is the batch dim for each type
+    return {
+        "text_tokens": tokens,
+        "input_ids": tensorize(input_ids).unsqueeze(0),
+        "attention_mask": tensorize(input_mask).unsqueeze(0),
+        "token_type_ids": tensorize(segment_ids).unsqueeze(0),
+        "bbox": tensorize(token_boxes).unsqueeze(0),
+        "label_masks": tensorize(label_mask.contiguous()).unsqueeze(0),
+        "labels": tensorize(label.contiguous()).unsqueeze(0),
+        "are_box_first_tokens": tensorize(are_box_first_tokens).unsqueeze(0),
+    }
+
+
 def parse_input(
     image,
     words,
@@ -157,6 +285,21 @@ def parse_input(
 ):
     width, height = image.size
     boxes = [normalize_box(b, width, height) for b in actual_boxes]
+    label = tensorize(label)
+    token_map = G.map_token(tokenizer, words, offset=len(fields))
+    kwargs = [
+        # REL_S
+        dict(lh2ft=True, in_tail=True, in_head=True),
+        # REL_G
+        dict(fh2ft=True),
+    ]
+    label = torch.cat(
+        [
+            G.expand(label[0], token_map, **kwargs[i]).unsqueeze(0)
+            for i in range(label.size(0))
+        ],
+        dim=0,
+    )
 
     tokens = []
     token_boxes = []
@@ -173,27 +316,26 @@ def parse_input(
 
     # Truncation: account for [CLS] and [SEP] with "- 2".
     special_tokens_count = 2
-    if len(tokens) > config.max_position_embeddings - special_tokens_count:
-        tokens = tokens[: (config.max_position_embeddings - special_tokens_count)]
-        token_boxes = token_boxes[
-            : (config.max_position_embeddings - special_tokens_count)
-        ]
-        actual_bboxes = actual_bboxes[
-            : (config.max_position_embeddings - special_tokens_count)
-        ]
-        token_actual_boxes = token_actual_boxes[
-            : (config.max_position_embeddings - special_tokens_count)
-        ]
-        are_box_first_tokens = are_box_first_tokens[
-            : (config.max_position_embeddings - special_tokens_count)
-        ]
+    true_length = config.max_position_embeddings - special_tokens_count
+    if len(tokens) > true_length:
+        tokens = tokens[:true_length]
+        token_boxes = token_boxes[:true_length]
+        token_actual_boxes = token_actual_boxes[:true_length]
+        actual_bboxes = actual_bboxes[:true_length]
+        are_box_first_tokens = are_box_first_tokens[:true_length]
+        label = label[:, : (len(fields) + true_length), :true_length]
 
     # add [SEP] token, with corresponding token boxes and actual boxes
     tokens += [tokenizer.sep_token]
     token_boxes += [sep_token_box]
     actual_bboxes += [[0, 0, width, height]]
     token_actual_boxes += [[0, 0, width, height]]
-    are_box_first_tokens += [2]
+    are_box_first_tokens += [1]
+    # use labels for auxilary result
+    n, i, j = label.shape
+    labels = torch.zeros((n, i + 1, j + 1), dtype=label.dtype)
+    labels[:, :i, :j] = label
+    label = labels
 
     segment_ids = [0] * len(tokens)
 
@@ -203,7 +345,11 @@ def parse_input(
     actual_bboxes = [[0, 0, width, height]] + actual_bboxes
     token_actual_boxes = [[0, 0, width, height]] + token_actual_boxes
     segment_ids = [1] + segment_ids
-    are_box_first_tokens = [3] + are_box_first_tokens
+    are_box_first_tokens = [2] + are_box_first_tokens
+    n, i, j = label.shape
+    labels = torch.zeros(n, i + 1, j + 1, dtype=label.dtype)
+    labels[:, 1:, 1:] = label
+    label = labels
 
     input_ids = tokenizer.convert_tokens_to_ids(tokens)
 
@@ -218,7 +364,7 @@ def parse_input(
     segment_ids += [tokenizer.pad_token_id] * padding_length
     token_boxes += [pad_token_box] * padding_length
     token_actual_boxes += [pad_token_box] * padding_length
-    are_box_first_tokens += [0] * padding_length
+    are_box_first_tokens += [3] * padding_length
 
     assert len(input_ids) == config.max_position_embeddings
     assert len(input_mask) == config.max_position_embeddings
@@ -228,55 +374,19 @@ def parse_input(
     assert len(are_box_first_tokens) == config.max_position_embeddings
 
     # Label parsing
-    labels = [
-        data.expand_rel_s(
-            score=label[0],
-            tokenizer=tokenizer,
-            coords=boxes,
-            texts=words,
-            labels=fields,
-        ),
-        data.expand_rel_g(
-            score=label[1],
-            tokenizer=tokenizer,
-            coords=boxes,
-            texts=words,
-            labels=fields,
-        ),
-    ]
-    labels = torch.tensor(labels)
-
-    nfields = len(fields)
-    npos = config.max_position_embeddings
-    labels = labels[:, :npos, : (npos - nfields)]
-    b, nnodes, nwords = labels.shape
-    # b * (nl + nt) * nt
-    # -> b * (nl + nt + padding_length) * (nl + nt + padding_length)
-    # + 2 because special tokens
-    labels = torch.cat(
-        [
-            labels,
-            torch.zeros(b, config.max_position_embeddings - nnodes + nfields, nwords),
-        ],
-        dim=1,
+    n, i, j = label.shape
+    labels = torch.zeros(
+        n,
+        config.max_position_embeddings + len(fields),
+        config.max_position_embeddings,
+        dtype=label.dtype,
     )
-    labels = torch.cat(
-        [
-            labels,
-            torch.zeros(
-                b,
-                config.max_position_embeddings + nfields,
-                config.max_position_embeddings - nwords,
-            ),
-        ],
-        dim=2,
-    )
-    itc_labels = labels[0, :nfields, :].transpose(0, 1).argmax(dim=-1)
-    stc_labels = labels[:, nfields:, :].transpose(1, 2)
+    labels[:, :i, :j] = label
+    label = labels
 
-    assert itc_labels.shape[0] == config.max_position_embeddings
-    assert stc_labels.shape[1] == config.max_position_embeddings
-    assert stc_labels.shape[2] == config.max_position_embeddings
+    # assert itc_labels.shape[0] == config.max_position_embeddings
+    # assert stc_labels.shape[1] == config.max_position_embeddings
+    # assert stc_labels.shape[2] == config.max_position_embeddings
 
     # labels = torch.cat(
     #     [torch.zeros(labels.shape[0], 1, config.max_position_embeddings), labels],
@@ -286,15 +396,15 @@ def parse_input(
     # The unsqueezed dim is the batch dim for each type
     return {
         "text_tokens": tokens,
-        "input_ids": torch.tensor(input_ids).unsqueeze(0),
-        "attention_mask": torch.tensor(input_mask).unsqueeze(0),
-        "token_type_ids": torch.tensor(segment_ids).unsqueeze(0),
-        "bbox": torch.tensor(token_boxes).unsqueeze(0),
-        "actual_bbox": torch.tensor(token_actual_boxes).unsqueeze(0),
-        "itc_labels": itc_labels.unsqueeze(0),
-        "stc_labels": stc_labels.unsqueeze(0),
-        "labels": torch.tensor(labels).unsqueeze(0),
-        "are_box_first_tokens": torch.tensor(are_box_first_tokens).unsqueeze(0),
+        "input_ids": tensorize(input_ids).unsqueeze(0),
+        "attention_mask": tensorize(input_mask).unsqueeze(0),
+        "token_type_ids": tensorize(segment_ids).unsqueeze(0),
+        "bbox": tensorize(token_boxes).unsqueeze(0),
+        "actual_bbox": tensorize(token_actual_boxes).unsqueeze(0),
+        # "itc_labels": itc_labels.unsqueeze(0),
+        # "stc_labels": stc_labels.unsqueeze(0),
+        "labels": tensorize(labels).unsqueeze(0),
+        "are_box_first_tokens": tensorize(are_box_first_tokens).unsqueeze(0),
     }
 
 
@@ -314,6 +424,8 @@ def batch_parse_input(tokenizer, config, batch_data):
         batch.append(features)
 
     batch_features = {}
+    for key in batch[0]:
+        print(key, batch[0][key].shape)
     for key in batch[0]:
         batch_features[key] = torch.cat([b[key] for b in batch], dim=0)
 
@@ -380,6 +492,7 @@ def hybrid_layoutlm(config_layoutlm, config_bert, layoutlm, bert, **kwargs):
     bert = partially_from_pretrained(config_bert, bert, **kwargs)
     layoutlm = partially_from_pretrained(config_layoutlm, layoutlm, **kwargs)
     layoutlm.embeddings.word_embeddings = bert.embeddings.word_embeddings
+    layoutlm.embeddings.position_embeddings = bert.embeddings.position_embeddings
     return layoutlm
 
 
@@ -409,18 +522,11 @@ class LayoutLMSpade(nn.Module):
 
         # (1) Initial token classification
         hidden_dropout_prob = config_bert.hidden_dropout_prob
-        self.itc_layer = nn.Sequential(
-            nn.Dropout(hidden_dropout_prob),
-            nn.Linear(config_bert.hidden_size, config_bert.hidden_size),
-            # Transpose(-1, -2),
-            # nn.BatchNorm1d(config_bert.hidden_size),
-            # Transpose(-1, -2),
-            nn.Dropout(hidden_dropout_prob),
-            nn.Linear(config_bert.hidden_size, n_classes),
-        )
+        self.dropout = nn.Dropout(hidden_dropout_prob)
+        self.simple = nn.Linear(config_bert.hidden_size, config_bert.hidden_size)
 
         # (2) Subsequent token classification
-        n_channels = 2
+        n_channels = 1
         self.rel_s = RelationTagger(
             hidden_size=config_bert.hidden_size,
             n_fields=self.n_classes,
@@ -428,37 +534,14 @@ class LayoutLMSpade(nn.Module):
             n_channels=n_channels,
         )
 
-        self.rel_g = RelationTagger(
+        self.rel_g = PlainRelationTagger(
             hidden_size=config_bert.hidden_size,
-            n_fields=0,  # self.n_classes,
-            max_position_embeddings=config_bert.max_position_embeddings,
-            n_channels=n_channels,
+            n_fields=self.n_classes,
         )
-
-        # self.rel_s_conv = nn.Conv2d(n_channels, 2, 1, bias=False)
-        # self.rel_g_conv = nn.Conv2d(n_channels, 2, 1, bias=False)
-
-        # Loss
-        self.loss_func = nn.CrossEntropyLoss(
-            reduction="mean", weight=torch.tensor([1, 0.1])
-        )
-        # self.loss_func = nn.BCEWithLogitsLoss()
-        self.itc_loss_func = nn.NLLLoss()
-        self.act = nn.Sigmoid()
-
-        # DEBUG
-        # self.threshold = nn.Threshold(0.5, 0.0)
-        # self.label_morph = nn.Linear(self.n_classes, 5)
-        # self.graph_conv = nn.Sequential(
-        #     nn.Conv2d(2, 4, (3, 3), padding=1),
-        #     nn.Conv2d(4, 4, (5, 5), padding=3),
-        #     nn.Conv2d(4, 2, (3, 3), padding=1),
-        # )
-        self.token_role_embeddings = nn.Embedding(2, config_bert.hidden_size)
-        self.backbone.embeddings.token_type_embeddings = nn.Embedding(
-            4, config_bert.hidden_size
-        )
+        # self.loss_func = nn.CrossEntropyLoss(reduction="none", label_smoothing=0.1)
+        self.loss_func = nn.CrossEntropyLoss()
         self.fill_value = 0
+        self.sm2d = nn.Softmax2d()
 
     def forward(self, batch):
         batch = BatchEncoding(batch)
@@ -466,34 +549,33 @@ class LayoutLMSpade(nn.Module):
             input_ids=batch.input_ids,
             bbox=batch.bbox,
             attention_mask=batch.attention_mask,
-            token_type_ids=batch.are_box_first_tokens,
+            # token_type_ids=batch.are_box_first_tokens,
         )
         last_hidden_state = outputs.last_hidden_state
-
-        rel_s = self.rel_s(last_hidden_state)
+        # mask = batch.input_ids == 1
+        # mask = torch.einsum("bi,bj->bij", mask, mask)
+        # rel_g = 1 - batch_consine_sim(middle)
         rel_g = self.rel_g(last_hidden_state)
+        # rel_g = rel_g * mask
+        # rel_g = rel_g * torch.cos(rel_g)
+        # rel_g = torch.sigmoid(rel_g)
+        # rel_g = -torch.threshold(-rel_g, -1, -1)
+        # rel_g = self.simple(last_hidden_state)
         # rel_s = self.rel_s_conv(rel_s)
         # rel_g = self.rel_g_conv(rel_g)
 
-        loss_s = self._get_rel_loss_no_mask(
-            rel_s,
-            batch.labels[:, 0],  # batch.are_box_first_tokens
-        )
-        loss_g = self._get_rel_loss_no_mask(
-            rel_g,
-            batch.labels[:, 1, self.n_classes :, :],
-            # batch.are_box_first_tokens,
-            # n_classes=0,
-        )
-
-        with torch.no_grad():
-            true_rel_s = rel_s[:, 0:1]
-            true_rel_g = rel_g[:, 0:1]
+        # rel = torch.cat([rel_g, rel_g], dim=1)
+        n = rel_g.shape[-1]
+        labels = batch.labels[:, 1].contiguous()
+        # labels = batch.labels[:, 1, -n:].contiguous()
+        # labels = batch.labels.contiguous()
+        # print(rel_g.shape)
+        loss = self.spade_loss(rel_g, labels)
 
         # true_rel_g = torch.softmax(rel_g, dim=1)[:, 0:1]
         return Namespace(
-            rel=[true_rel_s, true_rel_g],
-            loss=[loss_s, loss_g],
+            rel=rel_g[:, 0],
+            loss=[loss],
             attention_mask=batch.attention_mask,
         )
 
@@ -503,13 +585,27 @@ class LayoutLMSpade(nn.Module):
     #             attention_mask=batch.attention_mask,
     #             loss=,
     #         )
+    def spade_loss(self, rel, labels):
+        bsz, n, i, j = rel.shape
+        bsz, i1, j1 = labels.shape
+        assert i == i1
+        assert j == j1
+        lf = nn.CrossEntropyLoss(weight=torch.tensor([1, 0.1], device=rel.device))
+        loss = 0
+        labels = labels.type(torch.long)
+        for b in range(bsz):
+            loss += lf(rel[b : b + 1], labels[b : b + 1])
+        return loss
 
     #         return out
     def _get_rel_loss_no_mask(self, rel, labels):
-        labels = labels.unsqueeze(1)
-        rel[:, 1] = 1 - rel[:, 1]
-        labels = torch.cat([labels, labels], dim=1)
-        return self.loss_func(rel, labels)
+        # print(rel.shape, labels.shape)
+        # ml = labels.shape[-1]
+        # rel = rel.view(-1, ml)
+        # labels = labels.view(-1, ml)
+        labels = labels.type(torch.float)
+        losses = self.loss_func(rel, labels)
+        return losses
 
     def _get_rel_loss(self, rel, labels, token_types, n_classes=None):
         # Input: batch * 2 * node * node
@@ -520,8 +616,8 @@ class LayoutLMSpade(nn.Module):
             n_classes = self.n_classes
 
         # repeat channel on labels
-        labels = labels.unsqueeze(1)
-        labels = torch.cat([labels, 1 - labels], dim=1)
+        # labels = labels.unsqueeze(1)
+        # labels = torch.cat([labels, 1 - labels], dim=1)
         # print(labels.shape, rel.shape)
 
         # Mask label part
@@ -565,8 +661,8 @@ class LayoutLMSpade(nn.Module):
         #     [labels, torch.ones_like(labels, device=labels.device)],  #! line break
         #     dim=1,
         # )
-
-        return self.loss_func(rel, labels)
+        ml = rel.shape[-1]
+        return self.loss_func(rel.view(-1, ml), labels.view(-1, ml))
 
     # def forward(self, batch):
     #     if "text_tokens" in batch:
