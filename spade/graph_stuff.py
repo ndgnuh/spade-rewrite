@@ -22,6 +22,7 @@ def expand(
     lh2lt=False,
     in_tail=False,
     in_head=False,
+    fh2a=False,
 ):
     # rel-g: first head to first tail
     # rel-s: last head to first tail + in head + in tail
@@ -47,6 +48,9 @@ def expand(
         if in_tail:
             for (i, j) in zip(vs, vs[1:]):
                 new_edges.append((i, j))
+        if fh2a:
+            for j in vs:
+                new_edges.append((us[0], j))
 
     n = node_map[-1][-1] + 1
     new_adj = torch.zeros(n, n, dtype=torch.bool)
@@ -100,6 +104,21 @@ def graph2span(adj_s: torch.Tensor, adj_g: torch.Tensor, token_map: list):
         label[i] = span_labels["OTHER"]
 
     return label[offset:]
+
+
+def graph2span_classes(adj):
+    m, n = adj.shape
+    offset = m - n
+    adj = adj[offset:, :]
+    label = [0 for _ in range(n)]
+    for i in range(n):
+        has_incoming = torch.any(adj[:, i] == 1).item()
+        if has_incoming:
+            incoming = torch.where(adj[:, i])[0]
+            assert incoming.shape[0] == 1
+            label[i] = incoming[0].item()
+
+    return label
 
 
 # span = g_to_span(span_adj)

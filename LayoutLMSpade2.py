@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from typing import Optional
 from spade import model_layoutlm_2 as spade
 import numpy as np
+from scipy.stats import mode
+import traceback
 
 # from importlib import reload
 # reload(spade)
@@ -62,7 +64,8 @@ config_layoutlm = AutoConfig.from_pretrained(
 # In[3]:
 
 
-dataset = spade.SpadeDataset(tokenizer, config_bert, "sample_data/train.jsonl")
+# dataset = spade.SpadeDataset(tokenizer, config_bert, "sample_data/train.jsonl")
+dataset = spade.SpadeDataset(tokenizer, config_bert, "sample_data/batch.jsonl")
 test_dataset = spade.SpadeDataset(tokenizer, config_bert, "sample_data/test.jsonl")
 
 
@@ -77,17 +80,18 @@ dataloader = DataLoader(dataset, batch_size=1)
 
 # reload(spade)
 print(dataset.nfields)
-model = LayoutLMForTokenClassification.from_pretrained(
-    LAYOUTLM, num_labels=len(dataset.fields) + 1
-)
-bert = AutoModel.from_pretrained(BERT)
-model.layoutlm.embeddings.word_embeddings = bert.embeddings.word_embeddings
-model.layoutlm.embeddings.position_embeddings = bert.embeddings.position_embeddings
+model = spade.LayoutLMSpade(config=config_bert, num_labels=len(dataset.fields) + 1)
+# model = LayoutLMForTokenClassification.from_pretrained(
+#     LAYOUTLM, num_labels=len(dataset.fields) + 1
+# )
+# bert = AutoModel.from_pretrained(BERT)
+# model.layoutlm.embeddings.word_embeddings = bert.embeddings.word_embeddings
+# model.layoutlm.embeddings.position_embeddings = bert.embeddings.position_embeddings
 # checkpoint = os.path.join("checkpoint", list(sorted(os.listdir("checkpoint")))[-1])
 # print("Loading checkpoint", checkpoint)
 # checkpoint = torch.load(checkpoint)
 # model.load_state_dict(checkpoint)
-model.train()
+# model.train()
 # model = spade.LayoutLMSpade(
 #     config_layoutlm,
 #     config_bert,
@@ -199,16 +203,13 @@ def infer_once(model, dataset, idx=None):
             input_ids=b.input_ids,
             bbox=b.bbox,
             attention_mask=b.attention_mask,
-            # token_type_ids=b.token_type_ids,
-            # labels=b.itc_labels,
         )
-        # out.rel = torch.sigmoid(out.rel)
 
-    # classification = out.logits.argmax(dim=-1)[0]
+    # Infer token types
     labels = dataset.fields + ["other", "special"]
 
     token_predictions = (
-        out.logits.argmax(-1).squeeze().tolist()
+        out.logits_c.argmax(-1).squeeze().tolist()
     )  # the predictions are at the token level
     are_box_first_tokens = b.are_box_first_tokens[0].tolist()
     word_level_predictions = []  # let's turn them into word level predictions
@@ -234,8 +235,6 @@ def infer_once(model, dataset, idx=None):
             current_word = []
             current_prediction = []
 
-    from scipy.stats import mode
-
     predict_output = []
     for (tokens, preds) in zip(words, word_level_predictions):
         final_label = labels[mode(preds).mode[0]]
@@ -243,17 +242,31 @@ def infer_once(model, dataset, idx=None):
             continue
         word = tokenizer.decode(tokens)
         predict_output.append(f"- {word}: {final_label}")
-        # final_boxes.append(box)
-    # pprint(word_level_predictions)
-    # previous_label = None
-    # for c, t in zip(classification.tolist(), texts):
-    #     label = labels[c]
-    #     if previous_label == label:
-    #         print(t, end=" ")
-    #     else:
-    #         print(labels[c], ":", t)
-    #     previous_label = label
-    return predict_output
+
+    # Span prediction
+    ignore_token_ids = [
+        tokenizer.cls_token_id,
+        tokenizer.sep_token_id,
+        tokenizer.pad_token_id,
+    ]
+    labels_s = batch.labels_s[0].tolist()
+    logits_s = out.logits_s
+    span_relation = logits_s.argmax(-1)[0].tolist()
+    tokens = tokenizer.convert_ids_to_tokens(token_ids)
+    groups = []
+    gt_groups = []
+    for (i, j) in enumerate(span_relation):
+        if token_ids[i] in ignore_token_ids or token_ids[j] in ignore_token_ids:
+            continue
+        if j > 0:
+            groups.append(f"{tokens[j]} -> {tokens[i]}")
+    for (i, j) in enumerate(labels_s):
+        if token_ids[i] in ignore_token_ids or token_ids[j] in ignore_token_ids:
+            continue
+        if j > 0:
+            gt_groups.append(f"{tokens[j]} -> {tokens[i]}")
+
+    return [predict_output, groups, gt_groups]
 
 
 # In[8]:
@@ -309,14 +322,14 @@ for e in range(1000):
     summary_loss = 0
     for batch_ in tqdm.tqdm(dataloader):
         opt.zero_grad()
+        model = model.to(device)
         b = BatchEncoding(batch_).to(device)
-        # out = model.cuda()(b)
-        out = model.cuda()(
+        out = model(
             input_ids=b.input_ids,
             bbox=b.bbox,
             attention_mask=b.attention_mask,
-            # token_type_ids=b.token_type_ids,
-            labels=b.itc_labels,
+            labels_c=b.labels_c,
+            labels_s=b.labels_s,
         )
         if not isinstance(out.loss, list):
             loss = out.loss
@@ -346,11 +359,10 @@ for e in range(1000):
     try:
         # for i in range(5):
         #     log_print(out.itc_outputs[:, i])
-        result = infer_once(model, test_dataset, 0)
-        writer.add_text("Infer", "\r".join(result), e)
+        result = infer_once(model, test_dataset, idx=0)
+        # writer.add_text("Infer", "\r".join(result), e)
         log_print(pformat(result))
     except Exception:
-        import traceback
 
         traceback.print_exc()
     log_print(f"epoch {e + 1}")
