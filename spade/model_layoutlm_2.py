@@ -3,11 +3,16 @@ from transformers import AutoModel, AutoTokenizer, BatchEncoding
 from torch.utils.data import Dataset, DataLoader
 from dataclasses import dataclass
 from typing import Optional
+from . import graph_stuff as G
 from . import data
 import torch
 import json
 from argparse import Namespace
 import numpy as np
+
+
+def tensorize(x):
+    return torch.as_tensor(np.array(x))
 
 
 class Transpose(nn.Module):
@@ -75,16 +80,16 @@ class AttrDict(dict):
         self.__dict__ = self
 
 
-def gen_classifier_label(rel, text_tokens, fields, coords, tokenizer, texts):
-    rel_tokens = data.expand_rel_s(rel, tokenizer, texts, coords, fields)
+def gen_classifier_label(rel, text_tokens, fields):
+    # rel_tokens = data.expand_rel_s(rel, tokenizer, texts, coords, fields)
 
     classification = [None for _ in text_tokens]
-    for (i, j) in zip(*np.where(rel_tokens)):
+    for (i, j) in zip(*np.where(rel)):
         if i < len(fields):
             classification[j] = i
 
     for _ in text_tokens:
-        for (i, j) in zip(*np.where(rel_tokens)):
+        for (i, j) in zip(*np.where(rel)):
             i = i - len(fields)
             if i < 0:
                 continue
@@ -129,9 +134,11 @@ def parse_input(
         token_actual_boxes.extend([actual_bbox] * len(word_tokens))
         are_box_first_tokens.extend([1] + [0] * (len(word_tokens) - 1))
     if label is not None:
-        classifier_label = gen_classifier_label(
-            label[0], tokens, fields, token_actual_boxes, tokenizer, words
+        token_map = G.map_token(tokenizer, words, offset=len(fields))
+        token_rel_s = G.expand(
+            tensorize(label[0]), token_map, lh2ft=True, in_tail=True, in_head=True
         )
+        classifier_label = gen_classifier_label(token_rel_s, tokens, fields)
         other_label = classifier_label.other_label
         special_label = classifier_label.other_label
         classification = classifier_label.classification
@@ -195,62 +202,6 @@ def parse_input(
     assert len(are_box_first_tokens) == config.max_position_embeddings
     if label is not None:
         assert len(classification) == config.max_position_embeddings
-
-    # Label parsing
-    #     labels = [
-    #         data.expand_rel_s(
-    #             score=label[0],
-    #             tokenizer=tokenizer,
-    #             coords=boxes,
-    #             texts=words,
-    #             labels=fields,
-    #         ),
-    #         data.expand_rel_g(
-    #             score=label[1],
-    #             tokenizer=tokenizer,
-    #             coords=boxes,
-    #             texts=words,
-    #             labels=fields,
-    #         ),
-    #     ]
-    #     labels = torch.tensor(labels)
-
-    #     nfields = len(fields)
-    #     npos = config.max_position_embeddings
-    #     labels = labels[:, :npos, : (npos - nfields)]
-    #     b, nnodes, nwords = labels.shape
-    #     # b * (nl + nt) * nt
-    #     # -> b * (nl + nt + padding_length) * (nl + nt + padding_length)
-    #     # + 2 because special tokens
-    #     labels = torch.cat(
-    #         [
-    #             labels,
-    #             torch.zeros(b, config.max_position_embeddings - nnodes + nfields, nwords),
-    #         ],
-    #         dim=1,
-    #     )
-    #     labels = torch.cat(
-    #         [
-    #             labels,
-    #             torch.zeros(
-    #                 b,
-    #                 config.max_position_embeddings + nfields,
-    #                 config.max_position_embeddings - nwords,
-    #             ),
-    #         ],
-    #         dim=2,
-    #     )
-
-    #     itc_labels = labels[0, :nfields, :].transpose(0, 1).argmax(dim=-1)
-    #     stc_labels = labels[:, nfields:, :].transpose(1, 2)
-
-    #     assert itc_labels.shape[0] == config.max_position_embeddings
-    #     assert stc_labels.shape[1] == config.max_position_embeddings
-    #     assert stc_labels.shape[2] == config.max_position_embeddings
-
-    # The unsqueezed dim is the batch dim for each type
-    def tensorize(x):
-        return torch.as_tensor(np.array(x))
 
     return {
         "text_tokens": tokens,

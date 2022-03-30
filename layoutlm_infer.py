@@ -39,7 +39,7 @@ model.layoutlm.embeddings.word_embeddings = bert.embeddings.word_embeddings
 model.layoutlm.embeddings.position_embeddings = bert.embeddings.position_embeddings
 model.train(False)
 
-sd = torch.load("checkpoint/model-00100.pt")
+sd = torch.load("layoutlm-phobert-180data.pt")
 model.load_state_dict(sd)
 
 
