@@ -64,15 +64,12 @@ inv_span_labels = {v: k for (k, v) in span_labels.items()}
 inv_span_labels[None] = 4
 
 
-def graph2span(adj_s: torch.Tensor, adj_g: torch.Tensor, token_map: list):
+def graph2span(adj: torch.Tensor, adj_g: torch.Tensor):
     # Span adj
-    adj = expand(
-        adj_s + adj_g, token_map, lh2ft=True, in_head=True, in_tail=True, fh2ft=True
-    )
     m, n = adj.shape
     offset = m - n
 
-    label = [None for _ in range(m)]
+    label = [span_labels["OTHER"] for _ in range(m)]
     for i in range(n):
         if i < offset:
             continue

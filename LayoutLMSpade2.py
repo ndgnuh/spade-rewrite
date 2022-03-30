@@ -255,17 +255,38 @@ def infer_once(model, dataset, idx=None):
     tokens = tokenizer.convert_ids_to_tokens(token_ids)
     groups = []
     gt_groups = []
-    for (i, j) in enumerate(span_relation):
-        if token_ids[i] in ignore_token_ids or token_ids[j] in ignore_token_ids:
-            continue
-        if j > 0:
-            groups.append(f"{tokens[j]} -> {tokens[i]}")
-    for (i, j) in enumerate(labels_s):
-        if token_ids[i] in ignore_token_ids or token_ids[j] in ignore_token_ids:
-            continue
-        if j > 0:
-            gt_groups.append(f"{tokens[j]} -> {tokens[i]}")
+    # for (i, j) in enumerate(span_relation):
+    #     if token_ids[i] in ignore_token_ids or token_ids[j] in ignore_token_ids:
+    #         continue
+    #     if j > 0:
+    #         groups.append(f"{tokens[j]} -> {tokens[i]}")
+    # for (i, j) in enumerate(labels_s):
+    #     if token_ids[i] in ignore_token_ids or token_ids[j] in ignore_token_ids:
+    #         continue
+    #     if j > 0:
+    #         gt_groups.append(f"{tokens[j]} -> {tokens[i]}")
 
+    span_labels = dict(BEGIN=0, INSIDE=1, END=2, SINGLE=3, OTHER=4)
+    inv_span_labels = {v: k for (k, v) in span_labels.items()}
+    inv_span_labels[None] = "OTHER"
+    groups = []
+    current_group = []
+    for (tk, beiso) in enumerate(span_relation):
+        span_label = inv_span_labels[beiso]
+        if span_label != "OTHER":
+            current_group.append(tokens[tk])
+        if span_label == "END":
+            groups.append(current_group)
+            current_group = []
+    gt_groups = []
+    current_group = []
+    for (tk, beiso) in enumerate(labels_s):
+        span_label = inv_span_labels[beiso]
+        if span_label != "OTHER":
+            current_group.append(tokens[tk])
+        if span_label == "END":
+            gt_groups.append(current_group)
+            current_group = []
     return [predict_output, groups, gt_groups]
 
 

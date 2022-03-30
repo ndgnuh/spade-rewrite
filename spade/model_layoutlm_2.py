@@ -134,19 +134,21 @@ def parse_input(
         token_actual_boxes.extend([actual_bbox] * len(word_tokens))
         are_box_first_tokens.extend([1] + [0] * (len(word_tokens) - 1))
     if label is not None:
+        rel_s = tensorize(label[0])
+        rel_g = tensorize(label[1])
+
         # CLASSIFICATION LABEL
         token_map = G.map_token(tokenizer, words, offset=len(fields))
-        token_rel_s = G.expand(
-            tensorize(label[0]), token_map, lh2ft=True, in_tail=True, in_head=True
-        )
+        token_rel_s = G.expand(rel_s, token_map, lh2ft=True, in_tail=True, in_head=True)
         classifier_label = gen_classifier_label(token_rel_s, tokens, fields)
         other_label = classifier_label.other_label
         special_label = classifier_label.other_label
         classification = classifier_label.classification
 
         # SPAN LABEL
-        token_rel_g = G.expand(tensorize(label[1]), token_map, fh2ft=True)
-        span_label = G.graph2span_classes(token_rel_g)
+        token_rel_g = G.expand(rel_g, token_map, lh2ft=True, in_tail=True, in_head=True)
+        # span_label = G.graph2span_classes(token_rel_g)
+        span_label = G.graph2span(token_rel_s, token_rel_g)
     else:
         other_label = len(fields)
         special_label = len(fields)
@@ -172,7 +174,7 @@ def parse_input(
     token_actual_boxes += [[0, 0, width, height]]
     are_box_first_tokens += [1]
     classification += [special_label]
-    span_label += [-100]
+    span_label += [4]
 
     segment_ids = [0] * len(tokens)
 
@@ -184,8 +186,8 @@ def parse_input(
     segment_ids = [1] + segment_ids
     are_box_first_tokens = [2] + are_box_first_tokens
     classification = [special_label] + classification
-    span_label = [-100] + span_label
-    span_label = [l + 1 if l > 0 else l for l in span_label]
+    span_label = [4] + span_label
+    # span_label = [l + 1 if l > 0 else l for l in span_label]
 
     input_ids = tokenizer.convert_tokens_to_ids(tokens)
 
@@ -202,7 +204,7 @@ def parse_input(
     token_actual_boxes += [pad_token_box] * padding_length
     are_box_first_tokens += [3] * padding_length
     classification += [special_label] * padding_length
-    span_label += [-100] * padding_length
+    span_label += [4] * padding_length
     # print(len(classification), len(input_ids))
 
     assert len(input_ids) == config.max_position_embeddings
@@ -213,6 +215,8 @@ def parse_input(
     assert len(are_box_first_tokens) == config.max_position_embeddings
     assert len(classification) == config.max_position_embeddings
     assert len(span_label) == config.max_position_embeddings
+    # print(set(span_label))
+    # import sys
 
     return {
         "text_tokens": tokens,
@@ -376,9 +380,8 @@ class LayoutLMSpade(nn.Module):
         self.config = config = self.backbone.config
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.classify = nn.Linear(config.hidden_size, num_labels)
-        self.span_classify = nn.Linear(
-            config.hidden_size, bert.config.max_position_embeddings
-        )
+        self.num_span_labels = 5
+        self.span_classify = nn.Linear(config.hidden_size, self.num_span_labels)
 
         self.max_position_embeddings = bert.config.max_position_embeddings
 
@@ -398,9 +401,9 @@ class LayoutLMSpade(nn.Module):
             losses[0] = lf(logits_c.view(-1, self.num_labels), labels_c.view(-1))
 
         if labels_s is not None:
-            lf = nn.CrossEntropyLoss(ignore_index=-100)
+            lf = nn.CrossEntropyLoss()
             losses[1] = lf(
-                logits_s.view(-1, self.max_position_embeddings),
+                logits_s.view(-1, self.num_span_labels),
                 labels_s.view(-1),
             )
 
