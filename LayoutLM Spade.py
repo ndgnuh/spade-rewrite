@@ -54,8 +54,8 @@ config_layoutlm = AutoConfig.from_pretrained(
 # In[3]:
 
 
-# dataset = spade.SpadeDataset(tokenizer, config_bert, "sample_data/train.jsonl")
-dataset = spade.SpadeDataset(tokenizer, config_bert, "sample_data/batch.jsonl")
+dataset = spade.SpadeDataset(tokenizer, config_bert, "sample_data/train.jsonl")
+# dataset = spade.SpadeDataset(tokenizer, config_bert, "sample_data/batch.jsonl")
 test_dataset = spade.SpadeDataset(tokenizer, config_bert, "sample_data/test.jsonl")
 
 
@@ -177,46 +177,16 @@ def infer_once(model, dataset, idx=None):
     batch = dataset[idx : idx + 1]
     with torch.no_grad():
         out = model.to("cpu")(batch.to("cpu"))
-        # out.rel = torch.sigmoid(out.rel)
 
     ignore = [tokenizer.pad_token_id, tokenizer.sep_token_id, tokenizer.cls_token_id]
     input_ids = batch.input_ids[0].tolist()
     texts = tokenizer.convert_ids_to_tokens(input_ids)
-    # texts = ["sep"] + dataset.text_tokens[idx] + ["cls"]
-    # texts = texts + (len(input_ids) - len(texts)) * [tokenizer.pad_token]
-    print([i for i in input_ids if i not in ignore])
-    #     print(idx)
-    #     print("stc_outputs", out.stc_outputs.shape)
-    #     print("itc_outputs", out.itc_outputs.shape)
-    #     print("attention_mask", out.attention_mask.shape)
-    # rel_s = out.rel[0][0]
-    rel_g = out.rel[0]
-    # rel_g = batch.labels[0, 1, dataset.nfields :, :]
-    # label_mask = torch.tensor([False if i in ignore else True for i in input_ids])
-    # label_mask = torch.einsum("n,m->nm", label_mask, label_mask)
-    # label_mask_aux = torch.zeros_like(rel_g, dtype=torch.bool)
-    # label_mask_aux[-label_mask.size(0) :, -label_mask.size(1) :] = label_mask
-    # print(rel_g.shape, label_mask.shape)
-    # rel_g = rel_g * label_mask
-    # token_types = batch.are_box_first_tokens[0].tolist()
-    # for (i, token_type) in enumerate(token_types):
-    #     if token_type == 0:
-    #         rel_g[:, i] = 0
-    #         rel_g[i, :] = 0
-    # rel_s = out.rel[0].copy()
-    # print(rel_g.shape)
-    # rel_s = true_adj(out.itc_outputs[0], out.stc_outputs[0, 0, :, :], len(texts))
-    # rel_g = true_adj(
-    #     torch.zeros(out.itc_outputs[0].shape), out.stc_outputs[1, 0, :, :], len(texts)
-    # )
+    rel_g = out.rel[1].argmax(dim=1)[0]
     threshold = 0.5
-    # rel_s_orig = rel_s.detach().clone()
-    # print(rel_s[: dataset.nfields])
-    print(rel_g.shape)
     print(rel_g)
 
     # rel_s = tail_collision_avoidance(rel_s, threshold)
-    rel_g = tail_collision_avoidance(rel_g, threshold)
+    # rel_g = tail_collision_avoidance(rel_g, threshold)
 
     # rel_s = rel_s.numpy() > threshold
     # rel_g = rel_g.numpy() > threshold
@@ -227,24 +197,11 @@ def infer_once(model, dataset, idx=None):
     #     print("------+ rel s +---------")
     #     edge_s = []
     edge_g = []
-    #     for j in range(rel_s.shape[1]):
-    #         i = rel_s[:, j].argmax()
-    #         try:
-    #             edge_s.append(f"{texts[i]} -> {texts[j]}")
-    #         except:
-    #             pass
-    # print(edge_s[-40:])
     ignore = [tokenizer.pad_token_id, tokenizer.sep_token_id, tokenizer.cls_token_id]
     ignore_text = dataset.fields + [
         tokenizer.convert_ids_to_tokens(id) for id in ignore
     ]
-    print("------+ rel g +---------")
-    # nfields = len(dataset.fields)
-    for i, j in zip(*np.where(rel_g > threshold)):
-        # for j in range(rel_g.shape[1]):
-        #     i = rel_g[:, j].argmax()
-        if rel_g[i, j] < threshold:
-            continue
+    for i, j in zip(*torch.where(rel_g)):
         try:
             node_i = nodes[i]
             node_j = texts[j]
@@ -257,27 +214,24 @@ def infer_once(model, dataset, idx=None):
 
             traceback.print_exc()
             pass
-    # for j in range(rel_g.shape[1]):
-    #     i = rel_g[:, j].argmax()
-    #     try:
-    #         edge_g.append(f"{nodes[i]} -> {texts[j]}")
-    #     except:
-    #         pass
-    # print('rel_s', rel_s.shape)
-    #     print('rel_g', rel_s.shape)
-    #     print('texts', texts)
-    # parsed = graph_decoder.parse_graph(
-    #     [rel_s, rel_g],
-    #     texts=texts,
-    #     fields=dataset.fields,
-    #     strict=False,
-    # )
-    # for p in parsed:
-    #     for (k, v) in p.items():
-    #         ids = tokenizer.convert_tokens_to_ids(v.split())
-    #         p[k] = tokenizer.decode(ids)
+    # nfields = len(dataset.fields)
+    rel_g_gt = batch.labels[0, 1]
+    edge_g_gt = []
+    for i, j in zip(*torch.where(rel_g_gt)):
+        try:
+            node_i = nodes[i]
+            node_j = texts[j]
+            if node_i in ignore_text or node_j in ignore_text:
+                continue
 
-    return edge_g
+            edge_g_gt.append((node_i, node_j))
+        except Exception as e:
+            import traceback
+
+            traceback.print_exc()
+            pass
+
+    return [edge_g_gt, edge_g]
 
 
 # In[8]:
@@ -297,7 +251,7 @@ import transformers
 
 
 # opt = torch.optim.Adam(model.parameters(), lr=5e-5)
-opt = torch.optim.AdamW(model.parameters(), lr=5e-5)
+opt = torch.optim.Adam(model.parameters(), lr=1e-4)
 
 
 # In[11]:
@@ -326,7 +280,7 @@ def auto_weight(x):
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 model = model.to(device)
-loss_labels = ["loss", "loss"]
+loss_labels = ["loss_s", "loss_g"]
 for e in range(1000):
     total_loss = [0 for _ in loss_labels]
     summary_loss = 0
@@ -355,15 +309,14 @@ for e in range(1000):
         loss.backward()
         opt.step()
         lr_scheduler.step()
-    if e % 50 == 0:
+    if e % 20 == 0:
         torch.save(model.state_dict(), "checkpoint/model-%05d.pt" % e)
     try:
         # for i in range(5):
         #     log_print(out.itc_outputs[:, i])
         result = infer_once(model, test_dataset, 0)
-        result = [f"- {u} -> {v}" for (u, v) in result]
         pprint(result)
-        writer.add_text("Infer", "\r".join(result[:6]), e)
+        # writer.add_text("Infer", "\r".join(result[:6]), e)
     except Exception:
         import traceback
 
@@ -371,10 +324,10 @@ for e in range(1000):
     log_print(f"epoch {e + 1}")
     nbatch = len(dataloader)
     writer.add_scalar(f"Loss/total", summary_loss, e)
-    log_print(f"     total: {summary_loss}")
     for (ll, lv) in zip(loss_labels, total_loss):
         log_print(f"     {ll}: {lv}")
         writer.add_scalar(f"Loss/{ll}", lv, e)
+    log_print(f"     total: {summary_loss}")
 
 
 # In[ ]:

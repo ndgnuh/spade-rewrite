@@ -47,7 +47,7 @@ class PlainRelationTagger(nn.Module):
         self.W_label_0 = nn.Linear(hidden_size, hidden_size, bias=False)
         self.W_label_1 = nn.Linear(hidden_size, hidden_size, bias=False)
 
-    def forward(self, enc, true_len):
+    def forward(self, enc):
 
         enc_head = self.head(enc)
         enc_tail = self.tail(enc)
@@ -156,121 +156,6 @@ def poly_to_box(poly):
     return [min(x), min(y), max(x), max(y)]
 
 
-def parse_input_no_token(
-    image,
-    texts,
-    actual_bboxes,
-    tokenizer,
-    config,
-    label,
-    fields,
-    cls_token_box=[0, 0, 0, 0],
-    sep_token_box=[1000, 1000, 1000, 1000],
-    pad_token_box=[0, 0, 0, 0],
-):
-    width, height = image.size
-    token_boxes = [normalize_box(b, width, height) for b in actual_bboxes]
-    tokens = texts
-    are_box_first_tokens = [True for _ in token_boxes]
-    label = tensorize(label)
-    label_mask = torch.ones_like(label)
-
-    # Truncation: account for [CLS] and [SEP] with "- 2".
-    special_tokens_count = 2
-    true_length = config.max_position_embeddings - special_tokens_count
-    if len(tokens) > true_length:
-        tokens = tokens[:true_length]
-        token_boxes = token_boxes[:true_length]
-        actual_bboxes = actual_bboxes[:true_length]
-        are_box_first_tokens = are_box_first_tokens[:true_length]
-        label = label[:, : (len(fields) + true_length), :true_length]
-        label_mask = label_mask[:, : (len(fields) + true_length), :true_length]
-
-    # add [SEP] token, with corresponding token boxes and actual boxes
-    tokens += [tokenizer.sep_token]
-    token_boxes += [sep_token_box]
-    actual_bboxes += [[0, 0, width, height]]
-    are_box_first_tokens += [0]
-    segment_ids = [0] * len(tokens)
-    # use labels for auxilary result
-    n, i, j = label.shape
-    labels = torch.zeros((n, i + 1, j + 1), dtype=label.dtype)
-    labels[:, :i, :j] = label
-    label = labels
-    n, i, j = label_mask.shape
-    label_masks = torch.zeros((n, i + 1, j + 1), dtype=label_mask.dtype)
-    label_masks[:, :i, :j] = label_mask
-    label_mask = label_masks
-
-    # next: [CLS] token
-    tokens = [tokenizer.cls_token] + tokens
-    token_boxes = [cls_token_box] + token_boxes
-    actual_bboxes = [[0, 0, width, height]] + actual_bboxes
-    segment_ids = [1] + segment_ids
-    are_box_first_tokens = [0] + are_box_first_tokens
-    n, i, j = label.shape
-    labels = torch.zeros(n, i + 1, j + 1, dtype=label.dtype)
-    labels[:, 1:, 1:] = label
-    label = labels
-    n, i, j = label_mask.shape
-    label_masks = torch.zeros(n, i + 1, j + 1, dtype=label_mask.dtype)
-    label_masks[:, 1:, 1:] = label_mask
-    label_mask = label_masks
-
-    input_ids = tokenizer.convert_tokens_to_ids(tokens)
-
-    # The mask has 1 for real tokens and 0 for padding tokens. Only real
-    # tokens are attended to.
-    input_mask = [1] * len(input_ids)
-
-    # Zero-pad up to the sequence length.
-    padding_length = config.max_position_embeddings - len(input_ids)
-    input_ids += [tokenizer.pad_token_id] * padding_length
-    input_mask += [0] * padding_length
-    segment_ids += [tokenizer.pad_token_id] * padding_length
-    token_boxes += [pad_token_box] * padding_length
-    are_box_first_tokens += [0] * padding_length
-    n, i, j = label.shape
-    labels = torch.zeros(
-        n,
-        config.max_position_embeddings + len(fields),
-        config.max_position_embeddings,
-        dtype=label.dtype,
-    )
-    labels[:, :i, :j] = label
-    label = labels
-
-    n, i, j = label_mask.shape
-    label_masks = torch.zeros(
-        n,
-        config.max_position_embeddings + len(fields),
-        config.max_position_embeddings,
-        dtype=label_mask.dtype,
-    )
-    label_masks[:, :i, :j] = label_mask
-    label_mask = label_masks
-
-    assert len(input_ids) == config.max_position_embeddings
-    assert len(input_mask) == config.max_position_embeddings
-    assert len(segment_ids) == config.max_position_embeddings
-    assert len(token_boxes) == config.max_position_embeddings
-    assert len(are_box_first_tokens) == config.max_position_embeddings
-
-    #
-
-    # The unsqueezed dim is the batch dim for each type
-    return {
-        "text_tokens": tokens,
-        "input_ids": tensorize(input_ids).unsqueeze(0),
-        "attention_mask": tensorize(input_mask).unsqueeze(0),
-        "token_type_ids": tensorize(segment_ids).unsqueeze(0),
-        "bbox": tensorize(token_boxes).unsqueeze(0),
-        "label_masks": tensorize(label_mask.contiguous()).unsqueeze(0),
-        "labels": tensorize(label.contiguous()).unsqueeze(0),
-        "are_box_first_tokens": tensorize(are_box_first_tokens).unsqueeze(0),
-    }
-
-
 def parse_input(
     image,
     words,
@@ -287,17 +172,12 @@ def parse_input(
     boxes = [normalize_box(b, width, height) for b in actual_boxes]
     label = tensorize(label)
     token_map = G.map_token(tokenizer, words, offset=len(fields))
-    kwargs = [
-        # REL_S
-        dict(lh2ft=True, in_tail=True, in_head=True),
-        # REL_G
-        dict(fh2ft=True),
-    ]
+    rel_s = tensorize(label[0])
+    rel_g = tensorize(label[1])
+    token_rel_s = G.expand(rel_s, token_map, lh2ft=True, in_tail=True, in_head=True)
+    token_rel_g = G.expand(rel_g, token_map, fh2ft=True)
     label = torch.cat(
-        [
-            G.expand(label[0], token_map, **kwargs[i]).unsqueeze(0)
-            for i in range(label.size(0))
-        ],
+        [token_rel_s.unsqueeze(0), token_rel_g.unsqueeze(0)],
         dim=0,
     )
 
@@ -339,6 +219,13 @@ def parse_input(
 
     segment_ids = [0] * len(tokens)
 
+    # print("----")
+    # edge_0 = []
+    # for (i, j) in zip(*torch.where(token_rel_s)):
+    #     l = [(fields + tokens)[i], tokens[j]]
+    #     print(l)
+    #     edge_0.append(" -> ".join(l))
+
     # next: [CLS] token
     tokens = [tokenizer.cls_token] + tokens
     token_boxes = [cls_token_box] + token_boxes
@@ -346,10 +233,28 @@ def parse_input(
     token_actual_boxes = [[0, 0, width, height]] + token_actual_boxes
     segment_ids = [1] + segment_ids
     are_box_first_tokens = [2] + are_box_first_tokens
+    # This is tricky because cls need to be inserted
+    # after the labels
+    nfields = len(fields)
+    top_half = label[:, :nfields, :]
+    bottom_half = label[:, nfields:, :]
     n, i, j = label.shape
-    labels = torch.zeros(n, i + 1, j + 1, dtype=label.dtype)
-    labels[:, 1:, 1:] = label
-    label = labels
+    new_label = torch.zeros(n, i + 1, j + 1, dtype=label.dtype)
+    new_label[:, :nfields, 1:] = top_half
+    new_label[:, (nfields + 1) :, 1:] = bottom_half
+    label = new_label
+
+    #     print("----")
+    #     print("AFter CLS")
+    #     edge_1 = []
+    #     for (i, j) in zip(*torch.where(label[0])):
+    #         l = [(fields + tokens)[i], tokens[j]]
+    #         print(l)
+    #         edge_1.append(" -> ".join(l))
+    #     print("----")
+
+    #     for (i, j) in zip(edge_0, edge_1):
+    #         print(i, j, i == j)
 
     input_ids = tokenizer.convert_tokens_to_ids(tokens)
 
@@ -526,12 +431,9 @@ class LayoutLMSpade(nn.Module):
         self.simple = nn.Linear(config_bert.hidden_size, config_bert.hidden_size)
 
         # (2) Subsequent token classification
-        n_channels = 1
-        self.rel_s = RelationTagger(
+        self.rel_s = PlainRelationTagger(
             hidden_size=config_bert.hidden_size,
             n_fields=self.n_classes,
-            max_position_embeddings=config_bert.max_position_embeddings,
-            n_channels=n_channels,
         )
 
         self.rel_g = PlainRelationTagger(
@@ -542,6 +444,8 @@ class LayoutLMSpade(nn.Module):
         self.loss_func = nn.CrossEntropyLoss()
         self.fill_value = 0
         self.sm2d = nn.Softmax2d()
+
+        self.dropout = nn.Dropout(0.1)
 
     def forward(self, batch):
         batch = BatchEncoding(batch)
@@ -555,7 +459,8 @@ class LayoutLMSpade(nn.Module):
         # mask = batch.input_ids == 1
         # mask = torch.einsum("bi,bj->bij", mask, mask)
         # rel_g = 1 - batch_consine_sim(middle)
-        rel_g = self.rel_g(last_hidden_state)
+        rel_s = self.rel_s(self.dropout(last_hidden_state))
+        rel_g = self.rel_g(self.dropout(last_hidden_state))
         # rel_g = rel_g * mask
         # rel_g = rel_g * torch.cos(rel_g)
         # rel_g = torch.sigmoid(rel_g)
@@ -565,17 +470,19 @@ class LayoutLMSpade(nn.Module):
         # rel_g = self.rel_g_conv(rel_g)
 
         # rel = torch.cat([rel_g, rel_g], dim=1)
-        n = rel_g.shape[-1]
-        labels = batch.labels[:, 1].contiguous()
         # labels = batch.labels[:, 1, -n:].contiguous()
         # labels = batch.labels.contiguous()
         # print(rel_g.shape)
-        loss = self.spade_loss(rel_g, labels)
+        input_masks = batch.are_box_first_tokens < 2
+        labels_s = batch.labels[:, 0].contiguous()
+        labels_g = batch.labels[:, 1].contiguous()
+        loss_s = self.spade_loss(rel_s, labels_s, input_masks)
+        loss_g = self.spade_loss(rel_g, labels_g, input_masks)
 
         # true_rel_g = torch.softmax(rel_g, dim=1)[:, 0:1]
         return Namespace(
-            rel=rel_g[:, 0],
-            loss=[loss],
+            rel=[rel_s, rel_g],
+            loss=[loss_s, loss_g],
             attention_mask=batch.attention_mask,
         )
 
@@ -585,16 +492,21 @@ class LayoutLMSpade(nn.Module):
     #             attention_mask=batch.attention_mask,
     #             loss=,
     #         )
-    def spade_loss(self, rel, labels):
+    def spade_loss(self, rel, labels, input_masks):
         bsz, n, i, j = rel.shape
         bsz, i1, j1 = labels.shape
         assert i == i1
         assert j == j1
-        lf = nn.CrossEntropyLoss(weight=torch.tensor([1, 0.1], device=rel.device))
+        lf = nn.CrossEntropyLoss(weight=torch.tensor([0.1, 1], device=rel.device))
+        # lf = nn.CrossEntropyLoss()
+        true_lengths = true_length(input_masks)
         loss = 0
         labels = labels.type(torch.long)
         for b in range(bsz):
-            loss += lf(rel[b : b + 1], labels[b : b + 1])
+            nc = true_lengths[b]
+            nr = nc + self.n_classes
+            loss += lf(rel[b : b + 1, :, :nr, :nc], labels[b : b + 1, :nr, :nc])
+            # loss += lf(rel[b : b + 1], labels[b : b + 1])
         return loss
 
     #         return out
