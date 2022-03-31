@@ -329,8 +329,8 @@ def batch_parse_input(tokenizer, config, batch_data):
         batch.append(features)
 
     batch_features = {}
-    for key in batch[0]:
-        print(key, batch[0][key].shape)
+    # for key in batch[0]:
+    #     print(key, batch[0][key].shape)
     for key in batch[0]:
         batch_features[key] = torch.cat([b[key] for b in batch], dim=0)
 
