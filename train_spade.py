@@ -9,7 +9,11 @@ from transformers import AutoModel, AutoTokenizer, AutoConfig, BatchEncoding
 from dataclasses import dataclass
 from typing import Optional
 from spade import model_layoutlm as spade
+from spade.spade_inference import infer_single, post_process
 import numpy as np
+from pprint import pformat
+from random import randint
+import transformers
 
 # from importlib import reload
 # reload(spade)
@@ -29,77 +33,40 @@ def log_print(x):
         print(x)
 
 
-# In[2]:
-
 N_DIST_UNIT = 240
 
 # BERT = "bert-base-multilingual-cased"
 # BERT = "bert-base-multilingual-cased"
-BERT = "vinai/phobert-base"
-config_bert = AutoConfig.from_pretrained(
-    BERT,
-    local_files_only=True,
-    # max_position_embeddings=1024,
-    # hidden_dropout_prob=0.1,
-    num_hidden_layers=9,
-)
+# BERT = "vinai/phobert-base"
+LAYOUTLM = "microsoft/layoutlm-base-cased"
+BERT = "cl-tohoku/bert-base-japanese"
+BERT = "cl-tohoku/bert-base-japanese"
+config_bert = AutoConfig.from_pretrained(BERT)
 tokenizer = AutoTokenizer.from_pretrained(
-    BERT, local_files_only=True, **config_bert.to_dict()
+    BERT, local_files_only=False, **config_bert.to_dict()
 )
 config_layoutlm = AutoConfig.from_pretrained(
-    "microsoft/layoutlm-base-cased", local_files_only=True, **config_bert.to_dict()
+    LAYOUTLM, local_files_only=True, **config_bert.to_dict()
 )
 
 
-# In[3]:
-
-
-dataset = spade.SpadeDataset(tokenizer, config_bert, "sample_data/train.jsonl")
-# dataset = spade.SpadeDataset(tokenizer, config_bert, "sample_data/batch.jsonl")
-test_dataset = spade.SpadeDataset(tokenizer, config_bert, "sample_data/test.jsonl")
-
-
-# In[4]:
+# train_data = "sample_data/batch.jsonl"
+train_data = "sample_data/spade-data/business_card/train.jsonl"
+test_data = "sample_data/spade-data/business_card/test.jsonl"
+dataset = spade.SpadeDataset(tokenizer, config_bert, train_data)
+test_dataset = spade.SpadeDataset(tokenizer, config_bert, test_data)
 
 
 dataloader = DataLoader(dataset, batch_size=2)
 
 
-# In[5]:
-
-
-# reload(spade)
 print(dataset.nfields)
 model = spade.LayoutLMSpade(
     config_layoutlm,
     config_bert,
-    "microsoft/layoutlm-base-cased",
-    BERT,
-    # n_classes=len(["store", "menu", "subtotal", "total", "info"]),
     fields=dataset.fields,
-    n_classes=dataset.nfields,
-    local_files_only=False,
 )
-# sd = torch.load("checkpoint/model-00500.pt")
-# model.load_state_dict(sd)
 print(model)
-import sys
-
-# sys.exit(1)
-
-# bert = AutoModel.from_pretrained(BERT)
-# sd = bert.state_dict()
-# for (k, p) in model.backbone.named_parameters():
-#     if k in sd and sd[k].shape == p.data.shape:
-#         p.data = sd[k]
-#         p.require_grad = False
-# for p in model.backbone.parameters():
-#     p.require_grad = False
-# model = DDP(model)
-# out = model(dataset[0:4])
-
-
-# In[6]:
 
 
 import random
@@ -169,84 +136,6 @@ def true_adj(itc_out, stc_out, idx):
     return torch.cat([true_itc_out, true_stc_out], dim=-1).transpose(0, 1)
 
 
-def infer_once(model, dataset, idx=None):
-    n = len(dataset)
-    if idx is None:
-        idx = random.randint(0, n - 1)
-    #     idx = 157
-    batch = dataset[idx : idx + 1]
-    with torch.no_grad():
-        out = model.to("cpu")(batch.to("cpu"))
-
-    ignore = [tokenizer.pad_token_id, tokenizer.sep_token_id, tokenizer.cls_token_id]
-    input_ids = batch.input_ids[0].tolist()
-    texts = tokenizer.convert_ids_to_tokens(input_ids)
-    rel_g = out.rel[1].argmax(dim=1)[0]
-    threshold = 0.5
-    print(rel_g)
-
-    # rel_s = tail_collision_avoidance(rel_s, threshold)
-    # rel_g = tail_collision_avoidance(rel_g, threshold)
-
-    # rel_s = rel_s.numpy() > threshold
-    # rel_g = rel_g.numpy() > threshold
-    nodes = dataset.fields + texts
-
-    # print(rel_s.shape, len(nodes), len(texts))
-
-    #     print("------+ rel s +---------")
-    #     edge_s = []
-    edge_g = []
-    ignore = [tokenizer.pad_token_id, tokenizer.sep_token_id, tokenizer.cls_token_id]
-    ignore_text = dataset.fields + [
-        tokenizer.convert_ids_to_tokens(id) for id in ignore
-    ]
-    for i, j in zip(*torch.where(rel_g)):
-        try:
-            node_i = nodes[i]
-            node_j = texts[j]
-            if node_i in ignore_text or node_j in ignore_text:
-                continue
-
-            edge_g.append((node_i, node_j))
-        except Exception as e:
-            import traceback
-
-            traceback.print_exc()
-            pass
-    # nfields = len(dataset.fields)
-    rel_g_gt = batch.labels[0, 1]
-    edge_g_gt = []
-    for i, j in zip(*torch.where(rel_g_gt)):
-        try:
-            node_i = nodes[i]
-            node_j = texts[j]
-            if node_i in ignore_text or node_j in ignore_text:
-                continue
-
-            edge_g_gt.append((node_i, node_j))
-        except Exception as e:
-            import traceback
-
-            traceback.print_exc()
-            pass
-
-    return [edge_g_gt, edge_g]
-
-
-# In[8]:
-
-
-# for p in model.backbone.encoder.parameters():
-#     p.require_grad = False
-
-
-# In[9]:
-
-
-import transformers
-
-
 # In[10]:
 
 
@@ -312,11 +201,23 @@ for e in range(1000):
     if e % 20 == 0:
         torch.save(model.state_dict(), "checkpoint/model-%05d.pt" % e)
     try:
-        # for i in range(5):
-        #     log_print(out.itc_outputs[:, i])
-        result = infer_once(model, test_dataset, 0)
-        pprint(result)
-        # writer.add_text("Infer", "\r".join(result[:6]), e)
+        idx = randint(0, len(test_dataset))
+        test_batch = dataset[idx : idx + 1]
+        rel_s, rel_g = test_batch.labels[0, 0], test_batch.labels[0, 1]
+        data_id = dataset.raw[idx]["data_id"]
+        prediction = infer_single(model, tokenizer, test_dataset, idx)
+        ground_truth, _ = post_process(
+            tokenizer, rel_s, rel_g, test_batch, dataset.fields
+        )
+
+        print("---------------------------------")
+        print(data_id)
+        print("---------------------------------")
+        print("Predict:", prediction)
+        print("---------------------------------")
+        print("GTruth:", ground_truth)
+        writer.add_text("Inference/prediction", str(prediction), e)
+        writer.add_text("Inference/groud_truth", str(prediction), e)
     except Exception:
         import traceback
 
@@ -328,6 +229,3 @@ for e in range(1000):
         log_print(f"     {ll}: {lv}")
         writer.add_scalar(f"Loss/{ll}", lv, e)
     log_print(f"     total: {summary_loss}")
-
-
-# In[ ]:
