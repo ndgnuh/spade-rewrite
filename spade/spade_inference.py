@@ -16,26 +16,26 @@ def group_name(field):
         return field
 
 
-def infer_single(model, dataset, i):
+def infer_single(model, tokenizer, dataset, i):
     batch = dataset[i : i + 1]
     device = "cuda" if torch.cuda.is_available() else "cpu"
     with torch.no_grad():
         model = model.to(device)
         batch = BatchEncoding(batch).to(device)
         out = model(batch)
-        rel_s_score = out.rel[0][0, 1].detach()
-        rel_g_score = out.rel[1][0, 1].detach()
+        # rel_s_score = out.rel[0][0, 1].detach()
+        # rel_g_score = out.rel[1][0, 1].detach()
         rel_s = out.rel[0].argmax(dim=1)[0].detach()
         rel_g = out.rel[1].argmax(dim=1)[0].detach()
 
     data_id = dataset.raw[i]["data_id"]
     classification, has_loop = post_process(
-        rel_s, rel_g, batch, dataset.fields, data_id
+        tokenizer, rel_s, rel_g, batch, dataset.fields
     )
     return classification
 
 
-def post_process(rel_s, rel_g, batch, fields, data_id, **kwargs):
+def post_process(tokenizer, rel_s, rel_g, batch, fields):
     # Convert to numpy because we use matrix indices in a dict
     rel_s = rel_s.cpu().numpy()
     rel_g = rel_g.cpu().numpy()
