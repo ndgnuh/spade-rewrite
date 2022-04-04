@@ -6,7 +6,8 @@ from transformers import AutoConfig, AutoTokenizer, BatchEncoding
 from torch.utils.data import DataLoader
 from pprint import pprint
 from functools import cache
-from spade.score import cal_p_r_f1_of_edges,generate_score_dict
+from spade.score import scores
+
 
 @cache
 def group_name(field):
@@ -25,14 +26,18 @@ def infer_single(model, tokenizer, dataset, i):
         out = model(batch)
         # rel_s_score = out.rel[0][0, 1].detach()
         # rel_g_score = out.rel[1][0, 1].detach()
-        rel_s = out.rel[0].argmax(dim=1)[0].detach()
-        rel_g = out.rel[1].argmax(dim=1)[0].detach()
+        try:
+            rel_s = out.rel[0].argmax(dim=1)[0].detach()
+            rel_g = out.rel[1].argmax(dim=1)[0].detach()
+        except IndexError:
+            print_exc()
+            print(out.rel[0].shape, out.rel[1].shape)
 
     data_id = dataset.raw[i]["data_id"]
     classification, has_loop = post_process(
         tokenizer, rel_s, rel_g, batch, dataset.fields
     )
-    return classification ,rel_s,rel_g
+    return classification, rel_s, rel_g
 
 
 def post_process(tokenizer, rel_s, rel_g, batch, fields):
@@ -128,13 +133,15 @@ def post_process(tokenizer, rel_s, rel_g, batch, fields):
 
 
 if __name__ == "__main__":
+    BERT = "vinai/phobert-large"
     BERT = "vinai/phobert-base"
+    # BERT = "cl-tohoku/bert-base-japanese"
     config_bert = AutoConfig.from_pretrained(
         BERT,
         local_files_only=True,
         # max_position_embeddings=1024,
         # hidden_dropout_prob=0.1,
-        num_hidden_layers=9,
+        # num_hidden_layers=9,
     )
     tokenizer = AutoTokenizer.from_pretrained(
         BERT, local_files_only=True, **config_bert.to_dict()
@@ -142,7 +149,10 @@ if __name__ == "__main__":
     config_layoutlm = AutoConfig.from_pretrained(
         "microsoft/layoutlm-base-cased", local_files_only=True, **config_bert.to_dict()
     )
-    dataset = SpadeDataset(tokenizer, config_bert, "sample_data/test.jsonl")
+    dataset = SpadeDataset(tokenizer, config_bert, "sample_data/spade-data/CCCD/train.jsonl")
+    # dataset = SpadeDataset(
+    #     tokenizer, config_bert, "sample_data/spade-data/business_card/test.jsonl"
+    # )
     dataloader = DataLoader(dataset, batch_size=1)
 
     model = LayoutLMSpade(
@@ -157,18 +167,38 @@ if __name__ == "__main__":
     )
 
     try:
+        # sd = torch.load("checkpoint-jpcard/model-least-loss.pt")
         # sd = torch.load("spade-weights/model-00900.pt")
-        sd = torch.load("./spade-weights/model-00900.pt")
-        model.load_state_dict(sd,strict=False)
-        rel_s_p_r_f1=torch.FloatTensor([0,0,0])
-        rel_g_p_r_f1=torch.FloatTensor([0,0,0])
+        # sd = torch.load("./spade-weights/model-00900.pt")
+        # sd = torch.load("./checkpoint-vnbill/model-least-loss.pt")
+        # sd = torch.load("./checkpoint-vnbill-large/model-least-loss.pt")
+        # sd = torch.load("./checkpoint-vnbill/model-00980.pt")
+        # sd = torch.load("./checkpoint-vnbill/best_score.pt")
+        sd = torch.load("./checkpoint-cccd/best_score.pt")
+        # sd = torch.load("./checkpoint/f1_s_max.pt")
+        print(model)
+        model.load_state_dict(sd, strict=False)
+        # rel_s_p_r_f1 = torch.FloatTensor([0, 0, 0])
+        # rel_g_p_r_f1 = torch.FloatTensor([0, 0, 0])
         for i in range(len(dataset)):
-            classification,rel_s_pr,rel_g_pr = infer_single(model,tokenizer, dataset, i)
-            test_batch = dataset[i:i+1]
-            rel_s_p_r_f1+=cal_p_r_f1_of_edges(test_batch.labels[0][0],rel_s_pr)
-            rel_g_p_r_f1+=cal_p_r_f1_of_edges(test_batch.labels[0][1],rel_g_pr)
-
-
+            classification, rel_s_pr, rel_g_pr = infer_single(
+                model, tokenizer, dataset, i
+            )
+            test_batch = dataset[i : i + 1]
+            # rel_s_p_r_f1 += cal_p_r_f1_of_edges(test_batch.labels[0][0], rel_s_pr)
+            # rel_g_p_r_f1 += cal_p_r_f1_of_edges(test_batch.labels[0][1], rel_g_pr)
+            rel_s_score_i = scores(test_batch.labels[0][0], rel_s_pr)
+            rel_g_score_i = scores(test_batch.labels[0][1], rel_g_pr)
+            if i==0:
+                rel_s_score=rel_s_score_i
+                rel_g_score=rel_g_score_i
+            else:
+                for key, value in rel_s_score.items():
+                    rel_s_score[key]+=rel_s_score_i[key]
+                    rel_g_score[key]+=rel_g_score_i[key]
+                    
+       
+        
         # if has_loop:
         #     torch.save(
         #         {
@@ -179,16 +209,19 @@ if __name__ == "__main__":
         #             "rel_g": rel_g,
         #         },
         #         f"loop-{data_id}.pt",
-    #     )
-        print("rel_s_p_r_f1: ",rel_s_p_r_f1/len(dataset))
-        print("rel_g_p_r_f1: ",rel_g_p_r_f1/len(dataset))
-
-        print()
-        print("##################################################")
-        print(dataset.raw[i]["data_id"])
-        print("##################################################")
-        pprint(classification)
-        pprint(generate_score_dict("validation",rel_s_p_r_f1/len(dataset),rel_g_p_r_f1/len(dataset)))
+        #     )
+            print()
+            print("##################################################")
+            print(dataset.raw[i]["data_id"])
+            print("##################################################")
+            pprint(classification)
+        mean_score_s=rel_s_score
+        mean_score_g=rel_g_score
+        for key, value in mean_score_s.items():
+            mean_score_s[key]=mean_score_s[key]/len(dataset)
+            mean_score_g[key]=mean_score_g[key]/len(dataset)
+            pprint(f"Validation_s_edge_{key}: {mean_score_s[key]}")
+            pprint(f"Validation_g_edge_{key}: {mean_score_g[key]}")
 
     except Exception:
         print_exc()
