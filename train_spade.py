@@ -1,9 +1,5 @@
 #!/usr/bin/env python
 # coding: utf-8
-
-# In[1]:
-
-
 from torch import nn
 from transformers import AutoModel, AutoTokenizer, AutoConfig, BatchEncoding
 from dataclasses import dataclass
@@ -14,15 +10,13 @@ import numpy as np
 from pprint import pformat
 from random import randint
 import transformers
-
-# from importlib import reload
-# reload(spade)
 import os
 import tqdm
 import json
 import torch
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import Dataset, DataLoader
+from spade.score import scores
 
 writer = SummaryWriter()
 # from torch.nn.parallel import DistributedDataParallel as DDP
@@ -33,15 +27,96 @@ def log_print(x):
         print(x)
 
 
-N_DIST_UNIT = 240
+global BATCH_SIZE
+global CHECKPOINTDIR
+global NUM_HIDDEN_LAYERS
+global LAYOUTLM
+global BERT
+global train_data
+global test_data
 
-# BERT = "bert-base-multilingual-cased"
-# BERT = "bert-base-multilingual-cased"
-# BERT = "vinai/phobert-base"
-LAYOUTLM = "microsoft/layoutlm-base-cased"
-BERT = "cl-tohoku/bert-base-japanese"
-BERT = "cl-tohoku/bert-base-japanese"
-config_bert = AutoConfig.from_pretrained(BERT)
+
+def vietnamese():
+    global BATCH_SIZE
+    global CHECKPOINTDIR
+    global NUM_HIDDEN_LAYERS
+    global LAYOUTLM
+    global BERT
+    global train_data
+    global test_data
+
+    BATCH_SIZE = 4
+    CHECKPOINTDIR = "checkpoint-vnbill"
+    NUM_HIDDEN_LAYERS = 0
+    LAYOUTLM = "microsoft/layoutlm-base-cased"
+    BERT = "vinai/phobert-base"
+    train_data = "sample_data/train.jsonl"
+    test_data = "sample_data/test.jsonl"
+
+
+def vietnamese_cccd():
+    global BATCH_SIZE
+    global CHECKPOINTDIR
+    global NUM_HIDDEN_LAYERS
+    global LAYOUTLM
+    global BERT
+    global train_data
+    global test_data
+
+    BATCH_SIZE = 4
+    CHECKPOINTDIR = "checkpoint-cccd"
+    NUM_HIDDEN_LAYERS = 0
+    LAYOUTLM = "microsoft/layoutlm-base-cased"
+    BERT = "vinai/phobert-base"
+    train_data = "sample_data/spade-data/CCCD/train.jsonl"
+    test_data = "sample_data/spade-data/CCCD/test.jsonl"
+
+def vietnamese_large():
+    global BATCH_SIZE
+    global CHECKPOINTDIR
+    global NUM_HIDDEN_LAYERS
+    global LAYOUTLM
+    global BERT
+    global train_data
+    global test_data
+
+    BATCH_SIZE = 1
+    CHECKPOINTDIR = "checkpoint-vnbill-large"
+    NUM_HIDDEN_LAYERS = 10
+    LAYOUTLM = "microsoft/layoutlm-base-cased"
+    BERT = "vinai/phobert-large"
+    train_data = "sample_data/train.jsonl"
+    test_data = "sample_data/test.jsonl"
+
+
+def japanese():
+    global BATCH_SIZE
+    global CHECKPOINTDIR
+    global NUM_HIDDEN_LAYERS
+    global LAYOUTLM
+    global BERT
+    global train_data
+    global test_data
+
+    LAYOUTLM = "microsoft/layoutlm-base-cased"
+    # BERT = "bert-base-multilingual-cased"
+    BERT = "cl-tohoku/bert-base-japanese"
+    BATCH_SIZE = 3
+    CHECKPOINTDIR = "checkpoint-jpcard"
+    NUM_HIDDEN_LAYERS = 0
+    train_data = "sample_data/spade-data/business_card/train.jsonl"
+    test_data = "sample_data/spade-data/business_card/test.jsonl"
+
+
+# vietnamese_large()
+# vietnamese()
+# japanese()
+vietnamese_cccd()
+LOAD_MODEL=True
+if NUM_HIDDEN_LAYERS > 0:
+    config_bert = AutoConfig.from_pretrained(BERT, num_hidden_layers=NUM_HIDDEN_LAYERS)
+else:
+    config_bert = AutoConfig.from_pretrained(BERT)
 tokenizer = AutoTokenizer.from_pretrained(
     BERT, local_files_only=False, **config_bert.to_dict()
 )
@@ -50,15 +125,12 @@ config_layoutlm = AutoConfig.from_pretrained(
 )
 
 
-# train_data = "sample_data/batch.jsonl"
-train_data = "sample_data/spade-data/business_card/train.jsonl"
-test_data = "sample_data/spade-data/business_card/test.jsonl"
 dataset = spade.SpadeDataset(tokenizer, config_bert, train_data)
 test_dataset = spade.SpadeDataset(tokenizer, config_bert, test_data)
 
 
-dataloader = DataLoader(dataset, batch_size=2)
-
+dataloader = DataLoader(dataset, batch_size=BATCH_SIZE)
+dataloader_test = DataLoader(test_dataset, batch_size=BATCH_SIZE)
 
 print(dataset.nfields)
 model = spade.LayoutLMSpade(
@@ -67,6 +139,7 @@ model = spade.LayoutLMSpade(
     fields=dataset.fields,
 )
 print(model)
+# model = nn.DataParallel(model)
 
 
 import random
@@ -128,24 +201,16 @@ def tail_collision_avoidance(adj, threshold=0.5, lmax=20):
     return adj
 
 
-def true_adj(itc_out, stc_out, idx):
-    #     idx = torch.argmin(attention_mask) - 1
-    true_itc_out = itc_out[1 : (idx + 1)]
-    true_stc_out = stc_out[1 : (idx + 1), 1 : (idx + 1)]
-    true_stc_out = torch.sigmoid(true_stc_out)
-    return torch.cat([true_itc_out, true_stc_out], dim=-1).transpose(0, 1)
-
-
 # In[10]:
 
 
 # opt = torch.optim.Adam(model.parameters(), lr=5e-5)
-opt = torch.optim.Adam(model.parameters(), lr=1e-4)
 
 
 # In[11]:
 
 
+opt = torch.optim.AdamW(model.parameters(), lr=5e-5)
 lr_scheduler = transformers.get_cosine_schedule_with_warmup(
     opt, num_warmup_steps=30, num_training_steps=1000
 )
@@ -167,16 +232,38 @@ def auto_weight(x):
     return 10 ** (-np.round(np.log10(x)))
 
 
+try:
+    os.mkdir(CHECKPOINTDIR)
+except Exception:
+    pass
+
 device = "cuda" if torch.cuda.is_available() else "cpu"
 model = model.to(device)
+if LOAD_MODEL==True:
+    sd = torch.load(f"{CHECKPOINTDIR}/best_score.pt")
+            # sd = torch.load("./checkpoint/f1_s_max.pt")
+    print(model)
+    model.load_state_dict(sd, strict=False)
+
+min_loss = 9999
+max_score = 0
 loss_labels = ["loss_s", "loss_g"]
+s_bests = {}
+g_bests = {}
 for e in range(1000):
+    # if min_loss <= 3:
+    #     for p in model.backbone.parameters():
+    #         p.require_grad = True
+    # else:
+    #     for p in model.backbone.parameters():
+    #         p.require_grad = False
     total_loss = [0 for _ in loss_labels]
     summary_loss = 0
     for batch_ in tqdm.tqdm(dataloader):
         opt.zero_grad()
         b = BatchEncoding(batch_).to(device)
-        out = model.cuda()(b)
+        model = model.to(device)
+        out = model(b)
 
         if len(out.loss) > 1:
             weight = [auto_weight(l.item()) for l in out.loss]
@@ -187,6 +274,8 @@ for e in range(1000):
                 total_loss[i] += lv
                 # l.backward(retain_graph=True)
             # if sum(out.loss).item() > 10:
+            # loss = sum(out.loss)
+            # loss = out.loss[0] * 7 + out.loss[1] * 3
             loss = sum(out.loss)
             # else:
             #     loss = sum([l * w for (l, w) in zip(out.loss, weight)])
@@ -198,14 +287,22 @@ for e in range(1000):
         loss.backward()
         opt.step()
         lr_scheduler.step()
+
     if e % 20 == 0:
-        torch.save(model.state_dict(), "checkpoint/model-%05d.pt" % e)
+        torch.save(model.state_dict(), f"{CHECKPOINTDIR}/model-%05d.pt" % e)
+    if loss < min_loss:
+        torch.save(model.state_dict(), f"{CHECKPOINTDIR}/model-least-loss.pt")
+        min_loss = loss.item()
+
     try:
         idx = randint(0, len(test_dataset))
-        test_batch = dataset[idx : idx + 1]
+        test_batch = test_dataset[idx : idx + 1]
         rel_s, rel_g = test_batch.labels[0, 0], test_batch.labels[0, 1]
+
         data_id = dataset.raw[idx]["data_id"]
-        prediction = infer_single(model, tokenizer, test_dataset, idx)
+        prediction, rel_s_pr, rel_g_pr = infer_single(
+            model, tokenizer, test_dataset, idx
+        )
         ground_truth, _ = post_process(
             tokenizer, rel_s, rel_g, test_batch, dataset.fields
         )
@@ -216,12 +313,51 @@ for e in range(1000):
         print("Predict:", prediction)
         print("---------------------------------")
         print("GTruth:", ground_truth)
+        print("---------------------------------")
         writer.add_text("Inference/prediction", str(prediction), e)
-        writer.add_text("Inference/groud_truth", str(prediction), e)
+        writer.add_text("Inference/groud_truth", str(ground_truth), e)
     except Exception:
         import traceback
 
         traceback.print_exc()
+        print(data_id)
+
+    for i in range(len(test_dataset)):
+        # dataset -> test_dataset...
+        classification, rel_s_pr, rel_g_pr = infer_single(
+            model, tokenizer, test_dataset, i
+        )
+        test_batch = test_dataset[i : i + 1]
+        rel_s_score_i = scores(test_batch.labels[0][0], rel_s_pr)
+        rel_g_score_i = scores(test_batch.labels[0][1], rel_g_pr)
+        if i == 0:
+            rel_s_score = rel_s_score_i
+            rel_g_score = rel_g_score_i
+        else:
+            for key, value in rel_s_score.items():
+                rel_s_score[key] += rel_s_score_i[key]
+                rel_g_score[key] += rel_g_score_i[key]
+
+    mean_score_s = rel_s_score
+    mean_score_g = rel_g_score
+    for key, value in mean_score_s.items():
+        mean_score_s[key] = mean_score_s[key] / len(test_dataset)
+        mean_score_g[key] = mean_score_g[key] / len(test_dataset)
+        pprint(f"Validation_s_edge_{key}: {mean_score_s[key]}")
+        pprint(f"Validation_g_edge_{key}: {mean_score_g[key]}")
+        writer.add_scalar(f"Score/s_{key}", mean_score_s[key], e)
+        writer.add_scalar(f"Score/g_{key}", mean_score_g[key], e)
+        if s_bests.get(key, 0) > mean_score_s[key]:
+            torch.save(model.state_dict(), f"{CHECKPOINTDIR}/s_best_{key}.pt")
+            s_bests[key] = mean_score_s[key]
+        if g_bests.get(key, 0) > mean_score_g[key]:
+            torch.save(model.state_dict(), f"{CHECKPOINTDIR}/g_best_{key}.pt")
+            g_bests[key] = mean_score_s[key]
+
+    current_score = mean_score_s["f1"] + mean_score_g["precision"]
+    if current_score > max_score:
+        max_score = current_score
+        torch.save(model.state_dict(), f"{CHECKPOINTDIR}/best_score.pt")
     log_print(f"epoch {e + 1}")
     nbatch = len(dataloader)
     writer.add_scalar(f"Loss/total", summary_loss, e)
@@ -229,3 +365,4 @@ for e in range(1000):
         log_print(f"     {ll}: {lv}")
         writer.add_scalar(f"Loss/{ll}", lv, e)
     log_print(f"     total: {summary_loss}")
+    log_print(f"     best score: {max_score}")
