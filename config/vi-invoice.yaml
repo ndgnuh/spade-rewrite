@@ -1,0 +1,4 @@
+model:
+  name: model_layoutlm.LayoutLMSpade
+  checkpoint:
+
