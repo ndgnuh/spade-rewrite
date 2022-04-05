@@ -1,1 +1,4 @@
-torch
+ --extra-index-url https://download.pytorch.org/whl/cu113 torch
+numpy
+fastapi
+uvicorn[standard]
