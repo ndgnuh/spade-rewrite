@@ -1,6 +1,6 @@
 import numpy as np
 from torch import nn
-from transformers import AutoModel, AutoTokenizer, BatchEncoding
+from transformers import AutoModel, AutoTokenizer, BatchEncoding, AutoConfig
 from torch.utils.data import Dataset, DataLoader
 from dataclasses import dataclass
 from typing import Optional
@@ -43,7 +43,8 @@ class RelationTagger(nn.Module):
         super().__init__()
         self.head = nn.Linear(hidden_size, hidden_size)
         self.tail = nn.Linear(hidden_size, hidden_size)
-        self.field_embeddings = nn.Parameter(torch.rand(1, n_fields, hidden_size))
+        self.field_embeddings = nn.Parameter(
+            torch.rand(1, n_fields, hidden_size))
         self.W_label_0 = nn.Linear(hidden_size, hidden_size, bias=False)
         self.W_label_1 = nn.Linear(hidden_size, hidden_size, bias=False)
 
@@ -56,8 +57,10 @@ class RelationTagger(nn.Module):
         field_embeddings = self.field_embeddings.expand(batch_size, -1, -1)
         enc_head = torch.cat([field_embeddings, enc_head], dim=1)
 
-        score_0 = torch.matmul(enc_head, self.W_label_0(enc_tail).transpose(1, 2))
-        score_1 = torch.matmul(enc_head, self.W_label_1(enc_tail).transpose(1, 2))
+        score_0 = torch.matmul(
+            enc_head, self.W_label_0(enc_tail).transpose(1, 2))
+        score_1 = torch.matmul(
+            enc_head, self.W_label_1(enc_tail).transpose(1, 2))
 
         score = torch.cat(
             [
@@ -83,6 +86,7 @@ def partially_from_pretrained(config, model_name, **kwargs):
 
 
 def normalize_box(box, width, height):
+    # x1, y1, x2, y2
     return [
         int(1000 * (box[0] / width)),
         int(1000 * (box[1] / height)),
@@ -115,7 +119,8 @@ def parse_input(
     token_map = G.map_token(tokenizer, words, offset=len(fields))
     rel_s = tensorize(label[0])
     rel_g = tensorize(label[1])
-    token_rel_s = G.expand(rel_s, token_map, lh2ft=True, in_tail=True, in_head=True)
+    token_rel_s = G.expand(rel_s, token_map, lh2ft=True,
+                           in_tail=True, in_head=True)
     token_rel_g = G.expand(rel_g, token_map, fh2ft=True)
     label = torch.cat(
         [token_rel_s.unsqueeze(0), token_rel_g.unsqueeze(0)],
@@ -182,7 +187,7 @@ def parse_input(
     n, i, j = label.shape
     new_label = torch.zeros(n, i + 1, j + 1, dtype=label.dtype)
     new_label[:, :nfields, 1:] = top_half
-    new_label[:, (nfields + 1) :, 1:] = bottom_half
+    new_label[:, (nfields + 1):, 1:] = bottom_half
     label = new_label
 
     #     print("----")
@@ -289,6 +294,27 @@ def hybrid_layoutlm(config_layoutlm, config_bert, layoutlm, bert, **kwargs):
 
 
 class LayoutLMSpade(nn.Module):
+    @classmethod
+    def from_config(cls, config):
+        # Use only model config
+        checkpoint = config.model.checkpoint
+        config = config.model.config
+        layoutlm = config.layoutlm
+        bert = config.bert
+        layoutlm_extra_config = config.layoutlm_extra_config
+        bert_extra_config = config.bert_extra_config
+
+        config_layoutlm = AutoConfig.from_pretrained(layoutlm,
+                                                     **layoutlm_extra_config)
+        config_bert = AutoConfig.from_pretrained(bert,
+                                                 **bert_extra_config)
+        if checkpoint is not None:
+            sd = torch.load(checkpoint)
+
+        model = cls(config_layoutlm, config_bert, config.fields)
+        model = model.load_state_dict(sd)
+        return model
+
     def __init__(self, config_layoutlm, config_bert, fields, **kwargs):
         super().__init__()
         bert = config_bert._name_or_path
@@ -341,7 +367,8 @@ class LayoutLMSpade(nn.Module):
         bsz, i1, j1 = labels.shape
         assert i == i1
         assert j == j1
-        lf = nn.CrossEntropyLoss(weight=torch.tensor([0.1, 1], device=rel.device))
+        lf = nn.CrossEntropyLoss(
+            weight=torch.tensor([0.1, 1], device=rel.device))
         # lf = nn.CrossEntropyLoss()
         true_lengths = true_length(input_masks)
         loss = 0
@@ -349,7 +376,7 @@ class LayoutLMSpade(nn.Module):
         for b in range(bsz):
             nc = true_lengths[b]
             nr = nc + self.n_classes
-            loss += lf(rel[b : b + 1, :, :nr, :nc], labels[b : b + 1, :nr, :nc])
+            loss += lf(rel[b: b + 1, :, :nr, :nc], labels[b: b + 1, :nr, :nc])
             # loss += lf(rel[b : b + 1], labels[b : b + 1])
         return loss
 

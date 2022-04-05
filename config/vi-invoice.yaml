@@ -1,4 +1,18 @@
 model:
   name: model_layoutlm.LayoutLMSpade
-  checkpoint:
-
+  config:
+    layoutlm: microsoft/layoutlm-base-cased
+    layoutlm_extra_config: {}
+    layoutlm_extra_config:
+      local_files_only: true
+    bert: vinai/phobert-base
+    bert_extra_config:
+      local_files_only: true
+    fields:
+      - store.name
+      - store.address
+      - menu.name
+      - menu.id
+      - menu.unitprice
+      - menu.price
+  checkpoint: checkpoint-vnbill/best-score.pt
