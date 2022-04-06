@@ -35,7 +35,14 @@ def load_code_path(path):
     return getattr(module, name)
 
 
+def load_from_config(module: str, path: str, args: list, kwargs: dict):
+    f = importlib.import_module(module)
+    for attr in path.split('.'):
+        f = getattr(f, attr)
+    return f(*args, **kwargs)
+
 # SCORE RELATED
+
 
 def ensure_numpy(x):
     # Convert to numpy, or just stay as numpy
