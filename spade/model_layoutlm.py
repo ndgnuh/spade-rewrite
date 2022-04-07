@@ -297,31 +297,40 @@ class LayoutLMSpade(nn.Module):
     @classmethod
     def from_config(cls, config):
         # Use only model config
-        checkpoint = config.model.checkpoint
-        config = config.model.config
-        layoutlm = config.layoutlm
-        bert = config.bert
-        layoutlm_extra_config = config.layoutlm_extra_config
-        bert_extra_config = config.bert_extra_config
+        model = cls(config_layoutlm, config_bert, config.fields)
+        try:
+            model = model.load_state_dict(sd)
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            print("Can't load state dict")
+            # model = model.load_state_dict(sd, strict=False)
+        return model
 
+    def __init__(self, config, **kwargs):
+        super().__init__()
+
+        # Context
+        # checkpoint = config.model.checkpoint
+        # device = config.model.get('device', 'cpu')
+        num_fields = config.model.num_fields
+        model_config = config.model.config
+        layoutlm = model_config.layoutlm
+        bert = model_config.bert
+        layoutlm_extra_config = model_config.layoutlm_extra_config
+        bert_extra_config = model_config.bert_extra_config
+
+        # Transformers configs
         config_layoutlm = AutoConfig.from_pretrained(layoutlm,
                                                      **layoutlm_extra_config)
         config_bert = AutoConfig.from_pretrained(bert,
                                                  **bert_extra_config)
-        if checkpoint is not None:
-            sd = torch.load(checkpoint)
 
-        model = cls(config_layoutlm, config_bert, config.fields)
-        model = model.load_state_dict(sd)
-        return model
-
-    def __init__(self, config_layoutlm, config_bert, fields, **kwargs):
-        super().__init__()
         bert = config_bert._name_or_path
         layoutlm = config_layoutlm._name_or_path
         self.config_bert = config_bert
         self.config_layoutlm = config_layoutlm
-        self.n_classes = n_classes = len(fields)
+        self.num_fields = num_fields
         self.backbone = hybrid_layoutlm(
             config_layoutlm, config_bert, layoutlm, bert, **kwargs
         )
@@ -330,12 +339,12 @@ class LayoutLMSpade(nn.Module):
 
         self.rel_s = RelationTagger(
             hidden_size=config_bert.hidden_size,
-            n_fields=self.n_classes,
+            n_fields=self.num_fields,
         )
 
         self.rel_g = RelationTagger(
             hidden_size=config_bert.hidden_size,
-            n_fields=self.n_classes,
+            n_fields=self.num_fields,
         )
 
     def forward(self, batch):
@@ -375,17 +384,17 @@ class LayoutLMSpade(nn.Module):
         labels = labels.type(torch.long)
         for b in range(bsz):
             nc = true_lengths[b]
-            nr = nc + self.n_classes
+            nr = nc + self.num_fields
             loss += lf(rel[b: b + 1, :, :nr, :nc], labels[b: b + 1, :nr, :nc])
             # loss += lf(rel[b : b + 1], labels[b : b + 1])
         return loss
 
 
 class SpadeDataset(Dataset):
-    def __init__(self, tokenizer, config, jsonl):
+    def __init__(self, tokenizer, config, jsons):
         super().__init__()
-        with open(jsonl) as f:
-            data = [json.loads(line) for line in f.readlines()]
+        # with open(jsonl) as f:
+        data = [json.loads(line) for line in jsons]
 
         self.raw = data
         self.fields = data[0]["fields"]
@@ -398,6 +407,9 @@ class SpadeDataset(Dataset):
         return self._cached_length
 
     def __getitem__(self, idx):
+        if isinstance(idx, int):
+            idx = slice(idx, idx + 1)
+
         return BatchEncoding(
             {key: self.features[key][idx] for key in self.features.keys()}
         )

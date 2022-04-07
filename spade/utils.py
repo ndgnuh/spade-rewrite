@@ -36,6 +36,19 @@ def load_code_path(path):
 
 
 def load_from_config(module: str, path: str, args: list, kwargs: dict):
+    """
+    Returns module.path(*args, **kwargs)
+
+    Example
+    ---
+
+    module: transformers
+    path: AutoModel.from_pretrained
+    args:
+        - 'vinai/phobert-base'
+    kwargs:
+        local_files_only: True
+    """
     f = importlib.import_module(module)
     for attr in path.split('.'):
         f = getattr(f, attr)
