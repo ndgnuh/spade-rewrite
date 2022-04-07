@@ -6,3 +6,4 @@ pyyaml
 transformers
 google-cloud-vision
 python-multipart
+opencv-python
