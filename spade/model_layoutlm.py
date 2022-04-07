@@ -290,31 +290,19 @@ def hybrid_layoutlm(config_layoutlm, config_bert, layoutlm, bert, **kwargs):
     layoutlm = partially_from_pretrained(config_layoutlm, layoutlm, **kwargs)
     layoutlm.embeddings.word_embeddings = bert.embeddings.word_embeddings
     layoutlm.embeddings.position_embeddings = bert.embeddings.position_embeddings
+    layoutlm.embeddings.position_ids = bert.embeddings.position_ids
     return layoutlm
 
 
 class LayoutLMSpade(nn.Module):
-    @classmethod
-    def from_config(cls, config):
-        # Use only model config
-        model = cls(config_layoutlm, config_bert, config.fields)
-        try:
-            model = model.load_state_dict(sd)
-        except Exception:
-            import traceback
-            traceback.print_exc()
-            print("Can't load state dict")
-            # model = model.load_state_dict(sd, strict=False)
-        return model
-
     def __init__(self, config, **kwargs):
         super().__init__()
 
         # Context
         # checkpoint = config.model.checkpoint
         # device = config.model.get('device', 'cpu')
-        num_fields = config.model.num_fields
         model_config = config.model.config
+        num_fields = model_config.num_fields
         layoutlm = model_config.layoutlm
         bert = model_config.bert
         layoutlm_extra_config = model_config.layoutlm_extra_config
@@ -369,6 +357,7 @@ class LayoutLMSpade(nn.Module):
         return Namespace(
             rel=[rel_s, rel_g],
             loss=[loss_s, loss_g],
+            relations=[rel_s.argmax(dim=1), rel_g.argmax(dim=1)]
         )
 
     def spade_loss(self, rel, labels, input_masks):
