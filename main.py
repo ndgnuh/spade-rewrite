@@ -11,6 +11,28 @@ import torch
 from torch import mode
 
 
+def predict_json(context, json_: str):
+    """
+    Return JSON prediction Result from JSON string from body
+    """
+    dataset = SpadeDataset(
+        context.tokenizer, context.backbone_config, json_.splitlines())
+    for b in range(len(dataset)):
+        batch = dataset[b]
+        with torch.no_grad():
+            raw_output = context.model(batch)
+
+            final_output = post_process(
+                tokenizer=context.tokenizer,
+                rel_s=raw_output.relations[0][b],
+                rel_g=raw_output.relations[1][b],
+                fields=dataset.fields,
+                batch=batch
+            )
+
+    return final_output
+
+
 def create_app(config):
     app = FastAPI()
     context = Namespace()
@@ -42,23 +64,7 @@ def create_app(config):
         body = await req.body()
         content = body.decode('utf-8').strip()
         try:
-            # data = [json.loads(line) for line in content.splitlines()]
-            dataset = SpadeDataset(
-                context.tokenizer, context.backbone_config, content.splitlines())
-            for b in range(len(dataset)):
-                batch = dataset[b]
-                with torch.no_grad():
-                    raw_output = context.model(batch)
-
-                    final_output = post_process(
-                        tokenizer=context.tokenizer,
-                        rel_s=raw_output.relations[0][b],
-                        rel_g=raw_output.relations[1][b],
-                        fields=dataset.fields,
-                        batch=batch
-                    )
-
-                return final_output
+            return predict_json(context, content)
         except Exception:
             print_exc()
             return 0
