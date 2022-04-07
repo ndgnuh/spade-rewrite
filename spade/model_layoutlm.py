@@ -402,3 +402,104 @@ class SpadeDataset(Dataset):
         return BatchEncoding(
             {key: self.features[key][idx] for key in self.features.keys()}
         )
+
+
+def group_name(field):
+    if "." in field:
+        return field.split(".")[0]
+    else:
+        return field
+
+
+def post_process(tokenizer, rel_s, rel_g, batch, fields):
+    from spade.utils import ensure_numpy
+    # Convert to numpy because we use matrix indices in a dict
+    rel_s = ensure_numpy(rel_s)
+    rel_g = ensure_numpy(rel_g)
+
+    nfields = len(fields)
+    input_ids = batch.input_ids[0].cpu().tolist()
+    input_masks = batch.are_box_first_tokens < 2
+    input_masks = input_masks[0].tolist()
+    tokens = tokenizer.convert_ids_to_tokens(input_ids)
+    nodes = range(len(fields + input_ids))
+
+    itc_rel = rel_s[:nfields, :]
+    itc = {}
+    for (i, j) in zip(*np.where(itc_rel)):
+        itc[j] = i
+
+    # subsequence token classification
+    visited = {}
+    tails = {i: [] for i in itc}
+
+    # tail nodes
+    has_loop = False
+
+    def visit(i, head, depth=0):
+        if visited.get(i, False):
+            return
+        visited[i] = True
+        tails[head].append(i)
+        for j in np.where(rel_s[i + nfields, :])[0]:
+            visit(j, head=head, depth=depth + 1)
+
+    for i in itc:
+        visit(i, i)
+
+    # groups head nodes
+    groups = {}
+    has_group = {i: False for i in itc}
+    for (i, j) in zip(*np.where(rel_g[nfields:, :])):
+        # print(i, j, tokens[i], tokens[j])
+        if i not in groups:
+            groups[i] = [i]
+            has_group[i] = True
+        groups[i].append(j)
+        has_group[j] = True
+
+    # each group contain the head nodes
+    groups = list(groups.values())
+
+    # Standalone label which doesn't have group
+    standalones = {}
+    for (i, field_id) in itc.items():
+        if has_group[i]:
+            continue
+        g = group_name(fields[field_id])
+        standalone = standalones.get(g, [])
+        standalone.append(i)
+        standalones[g] = standalone
+    standalones = [l for l in standalones.values() if len(l) > 0]
+    groups = standalones + groups
+
+    # Tokenizer and add label to each group
+    classification = []
+    ignore_input_ids = [
+        tokenizer.pad_token_id,
+        tokenizer.sep_token_id,
+        tokenizer.cls_token_id,
+    ]
+    for head_nodes in groups:
+        # Get the tails tokens and concat them to full text
+        current_classification = []
+        for i in head_nodes:
+            if i not in tails:
+                # predicted Rel G may not connect to a head node
+                continue
+            tail = tails[i]
+            input_ids_i = [input_ids[j] for j in tail]
+            input_ids_i = [
+                id for id in input_ids_i if id not in ignore_input_ids]
+            texts = tokenizer.decode(input_ids_i)
+            field = fields[itc[i]]
+            # ignore empty fields
+            if len(texts) > 0:
+                # change dict to tuple for better data structure
+                # or change current_classification to dict
+                current_classification.append({field: texts})
+
+        if len(current_classification) > 0:
+            classification.append(current_classification)
+
+    return classification, has_loop
