@@ -4,3 +4,5 @@ fastapi
 uvicorn[standard]
 pyyaml
 transformers
+google-cloud-vision
+python-multipart
