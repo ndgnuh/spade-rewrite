@@ -9,32 +9,32 @@ model:
     bert_extra_config:
       local_files_only: true
     num_fields: 27
-    # fields:
-    #   - store.name
-    #   - store.address
-    #   - store.phone
-    #   - menu.name
-    #   - menu.id
-    #   - menu.count
-    #   - menu.unit
-    #   - menu.unitprice
-    #   - menu.price
-    #   - menu.discount
-    #   - subtotal.tax
-    #   - subtotal.count
-    #   - subtotal.discount
-    #   - subtotal.service
-    #   - subtotal.price
-    #   - total.price
-    #   - total.currency
-    #   - total.cash
-    #   - total.credit
-    #   - total.change
-    #   - info.transaction
-    #   - info.customer
-    #   - info.time
-    #   - info.staff
-    #   - total.price_label
-    #   - total.cash_label
-    #   - total.change_label
+    fields:
+      - store.name
+      - store.address
+      - store.phone
+      - menu.name
+      - menu.id
+      - menu.count
+      - menu.unit
+      - menu.unitprice
+      - menu.price
+      - menu.discount
+      - subtotal.tax
+      - subtotal.count
+      - subtotal.discount
+      - subtotal.service
+      - subtotal.price
+      - total.price
+      - total.currency
+      - total.cash
+      - total.credit
+      - total.change
+      - info.transaction
+      - info.customer
+      - info.time
+      - info.staff
+      - total.price_label
+      - total.cash_label
+      - total.change_label
   checkpoint: checkpoint-vnbill/best-score.pt

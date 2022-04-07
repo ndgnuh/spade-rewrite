@@ -8,6 +8,7 @@ from . import graph_stuff as G
 import torch
 import json
 from argparse import Namespace
+from traceback import print_exc
 
 
 def batch_consine_sim(batch):
@@ -17,7 +18,14 @@ def batch_consine_sim(batch):
 
 
 def tensorize(x):
-    return torch.as_tensor(np.array(x))
+    if isinstance(x, np.ndarray):
+        return torch.as_tensor(x)
+    else:
+        try:
+            return torch.as_tensor(np.array(x))
+        except Exception:
+            print_exc()
+            return torch.tensor(x)
 
 
 def true_length(mask):
@@ -115,17 +123,18 @@ def parse_input(
 ):
     width, height = image.size
     boxes = [normalize_box(b, width, height) for b in actual_boxes]
-    label = tensorize(label)
-    token_map = G.map_token(tokenizer, words, offset=len(fields))
-    rel_s = tensorize(label[0])
-    rel_g = tensorize(label[1])
-    token_rel_s = G.expand(rel_s, token_map, lh2ft=True,
-                           in_tail=True, in_head=True)
-    token_rel_g = G.expand(rel_g, token_map, fh2ft=True)
-    label = torch.cat(
-        [token_rel_s.unsqueeze(0), token_rel_g.unsqueeze(0)],
-        dim=0,
-    )
+    if label is not None:
+        label = tensorize(label)
+        token_map = G.map_token(tokenizer, words, offset=len(fields))
+        rel_s = tensorize(label[0])
+        rel_g = tensorize(label[1])
+        token_rel_s = G.expand(rel_s, token_map, lh2ft=True,
+                               in_tail=True, in_head=True)
+        token_rel_g = G.expand(rel_g, token_map, fh2ft=True)
+        label = torch.cat(
+            [token_rel_s.unsqueeze(0), token_rel_g.unsqueeze(0)],
+            dim=0,
+        )
 
     tokens = []
     token_boxes = []
@@ -149,7 +158,8 @@ def parse_input(
         token_actual_boxes = token_actual_boxes[:true_length]
         actual_bboxes = actual_bboxes[:true_length]
         are_box_first_tokens = are_box_first_tokens[:true_length]
-        label = label[:, : (len(fields) + true_length), :true_length]
+        if label is not None:
+            label = label[:, : (len(fields) + true_length), :true_length]
 
     # add [SEP] token, with corresponding token boxes and actual boxes
     tokens += [tokenizer.sep_token]
@@ -158,10 +168,11 @@ def parse_input(
     token_actual_boxes += [[0, 0, width, height]]
     are_box_first_tokens += [1]
     # use labels for auxilary result
-    n, i, j = label.shape
-    labels = torch.zeros((n, i + 1, j + 1), dtype=label.dtype)
-    labels[:, :i, :j] = label
-    label = labels
+    if label is not None:
+        n, i, j = label.shape
+        labels = torch.zeros((n, i + 1, j + 1), dtype=label.dtype)
+        labels[:, :i, :j] = label
+        label = labels
 
     segment_ids = [0] * len(tokens)
 
@@ -181,14 +192,15 @@ def parse_input(
     are_box_first_tokens = [2] + are_box_first_tokens
     # This is tricky because cls need to be inserted
     # after the labels
-    nfields = len(fields)
-    top_half = label[:, :nfields, :]
-    bottom_half = label[:, nfields:, :]
-    n, i, j = label.shape
-    new_label = torch.zeros(n, i + 1, j + 1, dtype=label.dtype)
-    new_label[:, :nfields, 1:] = top_half
-    new_label[:, (nfields + 1):, 1:] = bottom_half
-    label = new_label
+    if label is not None:
+        nfields = len(fields)
+        top_half = label[:, :nfields, :]
+        bottom_half = label[:, nfields:, :]
+        n, i, j = label.shape
+        new_label = torch.zeros(n, i + 1, j + 1, dtype=label.dtype)
+        new_label[:, :nfields, 1:] = top_half
+        new_label[:, (nfields + 1):, 1:] = bottom_half
+        label = new_label
 
     #     print("----")
     #     print("AFter CLS")
@@ -225,15 +237,16 @@ def parse_input(
     assert len(are_box_first_tokens) == config.max_position_embeddings
 
     # Label parsing
-    n, i, j = label.shape
-    labels = torch.zeros(
-        n,
-        config.max_position_embeddings + len(fields),
-        config.max_position_embeddings,
-        dtype=label.dtype,
-    )
-    labels[:, :i, :j] = label
-    label = labels
+    if label is not None:
+        n, i, j = label.shape
+        labels = torch.zeros(
+            n,
+            config.max_position_embeddings + len(fields),
+            config.max_position_embeddings,
+            dtype=label.dtype,
+        )
+        labels[:, :i, :j] = label
+        label = labels
 
     # assert itc_labels.shape[0] == config.max_position_embeddings
     # assert stc_labels.shape[1] == config.max_position_embeddings
@@ -245,21 +258,32 @@ def parse_input(
     # )
 
     # The unsqueezed dim is the batch dim for each type
-    return {
-        "text_tokens": tokens,
-        "input_ids": tensorize(input_ids).unsqueeze(0),
-        "attention_mask": tensorize(input_mask).unsqueeze(0),
-        "token_type_ids": tensorize(segment_ids).unsqueeze(0),
-        "bbox": tensorize(token_boxes).unsqueeze(0),
-        "actual_bbox": tensorize(token_actual_boxes).unsqueeze(0),
-        # "itc_labels": itc_labels.unsqueeze(0),
-        # "stc_labels": stc_labels.unsqueeze(0),
-        "labels": tensorize(labels).unsqueeze(0),
-        "are_box_first_tokens": tensorize(are_box_first_tokens).unsqueeze(0),
-    }
+    if label is not None:
+        return {
+            "text_tokens": tokens,
+            "input_ids": tensorize(input_ids).unsqueeze(0),
+            "attention_mask": tensorize(input_mask).unsqueeze(0),
+            "token_type_ids": tensorize(segment_ids).unsqueeze(0),
+            "bbox": tensorize(token_boxes).unsqueeze(0),
+            "actual_bbox": tensorize(token_actual_boxes).unsqueeze(0),
+            # "itc_labels": itc_labels.unsqueeze(0),
+            # "stc_labels": stc_labels.unsqueeze(0),
+            "labels": tensorize(labels).unsqueeze(0),
+            "are_box_first_tokens": tensorize(are_box_first_tokens).unsqueeze(0),
+        }
+    else:
+        return {
+            "text_tokens": tokens,
+            "input_ids": tensorize(input_ids).unsqueeze(0),
+            "attention_mask": tensorize(input_mask).unsqueeze(0),
+            "token_type_ids": tensorize(segment_ids).unsqueeze(0),
+            "bbox": tensorize(token_boxes).unsqueeze(0),
+            "actual_bbox": tensorize(token_actual_boxes).unsqueeze(0),
+            "are_box_first_tokens": tensorize(are_box_first_tokens).unsqueeze(0),
+        }
 
 
-def batch_parse_input(tokenizer, config, batch_data):
+def batch_parse_input(tokenizer, config, batch_data, fields):
     batch = []
     text_tokens = []
     for d in batch_data:
@@ -267,7 +291,6 @@ def batch_parse_input(tokenizer, config, batch_data):
         actual_boxes = [poly_to_box(b) for b in d["coord"]]
         image = Namespace(size=(d["img_sz"]["width"], d["img_sz"]["height"]))
         label = d["label"]
-        fields = d["fields"]
         features = parse_input(
             image, texts, actual_boxes, tokenizer, config, label=label, fields=fields
         )
@@ -348,10 +371,13 @@ class LayoutLMSpade(nn.Module):
         rel_g = self.rel_g(self.dropout(last_hidden_state))
 
         input_masks = batch.are_box_first_tokens < 2
-        labels_s = batch.labels[:, 0].contiguous()
-        labels_g = batch.labels[:, 1].contiguous()
-        loss_s = self.spade_loss(rel_s, labels_s, input_masks)
-        loss_g = self.spade_loss(rel_g, labels_g, input_masks)
+        if "labels" in batch:
+            labels_s = batch.labels[:, 0].contiguous()
+            labels_g = batch.labels[:, 1].contiguous()
+            loss_s = self.spade_loss(rel_s, labels_s, input_masks)
+            loss_g = self.spade_loss(rel_g, labels_g, input_masks)
+        else:
+            loss_s = loss_g = None
 
         # true_rel_g = torch.softmax(rel_g, dim=1)[:, 0:1]
         return Namespace(
@@ -380,16 +406,19 @@ class LayoutLMSpade(nn.Module):
 
 
 class SpadeDataset(Dataset):
-    def __init__(self, tokenizer, config, jsons):
+    def __init__(self, tokenizer, config, data, fields=None):
         super().__init__()
         # with open(jsonl) as f:
-        data = [json.loads(line) for line in jsons]
 
         self.raw = data
-        self.fields = data[0]["fields"]
+        if fields is None:
+            self.fields = data[0]["fields"]
+        else:
+            self.fields = fields
         self.nfields = len(self.fields)
         self._cached_length = len(data)
-        self.features = batch_parse_input(tokenizer, config, data)
+        self.features = batch_parse_input(
+            tokenizer, config, data, fields=fields)
         self.text_tokens = self.features.pop("text_tokens")
 
     def __len__(self):
