@@ -1,3 +1,5 @@
+import math
+from scipy import ndimage
 from traceback import print_exc
 import spade.utils as utils
 from fastapi import FastAPI, Request, UploadFile, File
@@ -18,6 +20,23 @@ from functools import reduce
 from PIL import Image
 
 os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = '/home/hung/grooo-gkeys.json'
+
+
+def hough_lines_rotate(img):
+    img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    img_edges = cv2.Canny(img_gray, 100, 100, apertureSize=3)
+    lines = cv2.HoughLinesP(img_edges, 1, math.pi / 180.0,
+                            100, minLineLength=100, maxLineGap=5)
+    angles = []
+
+    for [[x1, y1, x2, y2]] in lines:
+        cv2.line(img, (x1, y1), (x2, y2), (255, 0, 0), 3)
+        angle = math.degrees(math.atan2(y2 - y1, x2 - x1))
+        angles.append(angle)
+
+    median_angle = np.median(angles)
+    print("Angle", median_angle)
+    return ndimage.rotate(img, median_angle)
 
 
 def exif_reorientation(image):
@@ -133,8 +152,8 @@ def convert2spadedata(response: vision.AnnotateFileResponse, width, height):
     # SORT BOUNDING BOXES INTO LEFT-RIGHT, UP/DOWN ORDER
     bboxes = [BBox.new_polygon(*b) for b in data['coord']]
     sorted_indices = arrange_row(position_graph(bboxes))
-    for r in sorted_indices:
-        print([data['text'][c] for c in r])
+    # for r in sorted_indices:
+    #     print([data['text'][c] for c in r])
     sorted_indices = reduce(lambda x, y: x + y, sorted_indices, [])
     data['coord'] = [bboxes[i].xyxy for i in sorted_indices]
     return data
@@ -190,12 +209,24 @@ def create_app(config):
     def server_configuration():
         return context.config
 
+    @ app.post("/from-image-no-rotate")
+    async def _(file: UploadFile = File(...)):
+        content = await file.read()
+        img = np.fromstring(content, np.uint8)
+        img = cv2.imdecode(img, cv2.IMREAD_COLOR)
+
+        # OCR AND PREPARE DATA
+        height, width, channel = img.shape
+        data = convert2spadedata(ocr(content), width, height)
+        return predict_json(context, [data])
+
     @ app.post("/from-image")
     async def _(file: UploadFile = File(...)):
         content = await file.read()
         img = np.fromstring(content, np.uint8)
         img = cv2.imdecode(img, cv2.IMREAD_COLOR)
         img = np.array(exif_reorientation(img))
+        img = hough_lines_rotate(img)
 
         # OCR AND PREPARE DATA
         height, width, channel = img.shape
