@@ -95,18 +95,13 @@ def partially_from_pretrained(config, model_name, **kwargs):
 
 def normalize_box(box, width, height):
     # x1, y1, x2, y2
-    return [
+    normed = [
         int(1000 * (box[0] / width)),
         int(1000 * (box[1] / height)),
         int(1000 * (box[2] / width)),
         int(1000 * (box[3] / height)),
     ]
-
-
-def poly_to_box(poly):
-    x = [p[0] for p in poly]
-    y = [p[1] for p in poly]
-    return [min(x), min(y), max(x), max(y)]
+    return np.clip(normed, 0, 1000)
 
 
 def parse_input(
@@ -288,7 +283,7 @@ def batch_parse_input(tokenizer, config, batch_data, fields):
     text_tokens = []
     for d in batch_data:
         texts = d["text"]
-        actual_boxes = [poly_to_box(b) for b in d["coord"]]
+        actual_boxes = [b for b in d["coord"]]
         image = Namespace(size=(d["img_sz"]["width"], d["img_sz"]["height"]))
         label = d["label"]
         features = parse_input(

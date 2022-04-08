@@ -13,20 +13,97 @@ from google.cloud import vision
 import os
 import cv2
 import numpy as np
-
+from spade.bounding_box import BBox
+from functools import reduce
+from PIL import Image
 
 os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = '/home/hung/grooo-gkeys.json'
+
+
+def exif_reorientation(image):
+    if isinstance(image, np.ndarray):
+        image = Image.fromarray(image)
+    # https://stackoverflow.com/questions/44537075/image-orientation-pythonopencv
+    # this exif thing is black magic
+    angle = {3: 180, 6: 270, 8: 90}.get(image.getexif().get(274, 0), 0)
+    return image.rotate(angle)
+
+
+def position_graph(bboxes):
+    n = len(bboxes)
+    xcentres = [b.center_x for b in bboxes]
+    ycentres = [b.center_y for b in bboxes]
+    heights = [b.height for b in bboxes]
+    width = [b.width for b in bboxes]
+
+    def is_top_to(i, j):
+        result = (ycentres[j] - ycentres[i]) > ((heights[i] + heights[j]) / 4)
+        return result
+
+    def is_left_to(i, j):
+        return (xcentres[i] - xcentres[j]) > ((width[i] + width[j]) / 4)
+
+    # <L-R><T-B>
+    # +1: Left/Top
+    # -1: Right/Bottom
+    g = np.zeros((n, n), dtype='int')
+    for i in range(n):
+        for j in range(n):
+            if is_left_to(i, j):
+                g[i, j] += 10
+            if is_left_to(j, i):
+                g[i, j] -= 10
+            if is_top_to(i, j):
+                g[i, j] += 1
+            if is_top_to(j, i):
+                g[i, j] -= 1
+    return g
+
+
+def arrange_row(position_graph=None):
+    n, m = position_graph.shape
+    assert m == n
+    visited = [False for i in range(n)]
+
+    def row_indices(i: int):
+        if visited[i]:
+            return []
+        visited[i] = True
+        indices = [j for j in range(n)
+                   if abs(position_graph[i, j]) == 10
+                   and not visited[i]]
+        indices = [i] + indices
+        indices = np.array(indices)
+        aux = position_graph[np.ix_(indices, indices)]
+        order = np.argsort(np.sum(aux, axis=1))
+        indices = indices[order].tolist()
+        indices = [int(i) for i in indices]
+        for i in indices:
+            visited[i] = True
+        return indices
+
+    rows = []
+    for i in range(n):
+        if visited[i]:
+            continue
+        indices = row_indices(i)
+        if len(indices) > 0:
+            rows.append(indices)
+
+    return rows
 
 
 def ocr(content: bytes):
     client = vision.ImageAnnotatorClient()
     image = vision.Image(content=content)
-    response = client.text_detection(image=image)
+    response = client.document_text_detection(image=image)
     return response
 
 
-def convert2spadedata(response: vision.AnnotateFileResponse):
+def convert2spadedata(response: vision.AnnotateFileResponse, width, height):
     j = type(response).to_json(response)
+    with open("response.json", "w") as f:
+        f.write(j)
     j = json.loads(j)
 
     texts = j['textAnnotations']
@@ -51,6 +128,15 @@ def convert2spadedata(response: vision.AnnotateFileResponse):
     data['vertical'] = [False for _ in data['text']]
     data['img_feature'] = None
     data['img_url'] = None
+    data['img_sz'] = {'width': width, 'height': height}
+
+    # SORT BOUNDING BOXES INTO LEFT-RIGHT, UP/DOWN ORDER
+    bboxes = [BBox.new_polygon(*b) for b in data['coord']]
+    sorted_indices = arrange_row(position_graph(bboxes))
+    for r in sorted_indices:
+        print([data['text'][c] for c in r])
+    sorted_indices = reduce(lambda x, y: x + y, sorted_indices, [])
+    data['coord'] = [bboxes[i].xyxy for i in sorted_indices]
     return data
 
 
@@ -100,24 +186,23 @@ def create_app(config):
     # Context name space for the app
     app.context = context
 
-    @app.get("/configuration")
+    @ app.get("/configuration")
     def server_configuration():
         return context.config
 
-    @app.post("/from-image")
+    @ app.post("/from-image")
     async def _(file: UploadFile = File(...)):
         content = await file.read()
         img = np.fromstring(content, np.uint8)
         img = cv2.imdecode(img, cv2.IMREAD_COLOR)
-        h, w, c = img.shape
+        img = np.array(exif_reorientation(img))
 
         # OCR AND PREPARE DATA
-        data = ocr(content)
-        data = convert2spadedata(data)
-        data['img_sz'] = {'width': w, 'height': h}
+        height, width, channel = img.shape
+        data = convert2spadedata(ocr(content), width, height)
         return predict_json(context, [data])
 
-    @app.post("/from-json")
+    @ app.post("/from-json")
     async def extract_json(req: Request):
         body = await req.body()
         content = body.decode('utf-8').strip()
