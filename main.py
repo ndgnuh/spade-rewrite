@@ -15,7 +15,7 @@ from google.cloud import vision
 import os
 import cv2
 import numpy as np
-from spade.bounding_box import BBox
+from spade.bounding_box import Box
 from functools import reduce
 from PIL import Image
 
@@ -50,8 +50,9 @@ def exif_reorientation(image):
 
 def position_graph(bboxes):
     n = len(bboxes)
-    xcentres = [b.center_x for b in bboxes]
-    ycentres = [b.center_y for b in bboxes]
+    centres = [b.center for b in bboxes]
+    xcentres = [c[0] for c in centres]
+    ycentres = [c[1] for c in centres]
     heights = [b.height for b in bboxes]
     width = [b.width for b in bboxes]
 
@@ -150,7 +151,7 @@ def convert2spadedata(response: vision.AnnotateFileResponse, width, height):
     data['img_sz'] = {'width': width, 'height': height}
 
     # SORT BOUNDING BOXES INTO LEFT-RIGHT, UP/DOWN ORDER
-    bboxes = [BBox.new_polygon(*b) for b in data['coord']]
+    bboxes = [Box(b, Box.Type.QUAD) for b in data['coord']]
     sorted_indices = arrange_row(position_graph(bboxes))
     # for r in sorted_indices:
     #     print([data['text'][c] for c in r])
@@ -191,16 +192,16 @@ def create_app(config):
     context.backbone_config = AutoConfig.from_pretrained("vinai/phobert-base")
 
     # Model
-    context.model = LayoutLMSpade(config)
-    print(context.model)
-    device = config.model.get("device", None)
-    if device is None:
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    checkpoint = config.model.get("checkpoint", None)
-    strict = config.model.get("checkpoint_strict", True)
-    if checkpoint is not None:
-        sd = torch.load(checkpoint, map_location=device)
-        context.model.load_state_dict(sd, strict=strict)
+    # context.model = LayoutLMSpade(config)
+    # print(context.model)
+    # device = config.model.get("device", None)
+    # if device is None:
+    #     device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    # checkpoint = config.model.get("checkpoint", None)
+    # strict = config.model.get("checkpoint_strict", True)
+    # if checkpoint is not None:
+    #     sd = torch.load(checkpoint, map_location=device)
+    #     context.model.load_state_dict(sd, strict=strict)
 
     # Context name space for the app
     app.context = context
@@ -218,6 +219,8 @@ def create_app(config):
         # OCR AND PREPARE DATA
         height, width, channel = img.shape
         data = convert2spadedata(ocr(content), width, height)
+        with open("tmp.jsonl", "w") as f:
+            f.write(json.dumps(data))
         return predict_json(context, [data])
 
     @ app.post("/from-image")
@@ -231,6 +234,8 @@ def create_app(config):
         # OCR AND PREPARE DATA
         height, width, channel = img.shape
         data = convert2spadedata(ocr(content), width, height)
+        with open("tmp.jsonl", "w") as f:
+            f.write(json.dumps(data))
         return predict_json(context, [data])
 
     @ app.post("/from-json")
