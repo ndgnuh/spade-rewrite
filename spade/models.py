@@ -7,10 +7,33 @@ from .box import Box
 
 @dataclass
 class SpadeData:
+    """Unified model input data
+
+    This struct aims to provide an unified input to the preprocessing
+    process. Since difference OCR engine has difference outputs and
+    we have yet decided on one, we can just translate each of the OCR
+    outputs to this struct and write the preprocessing functionality once.
+
+    Attributes
+    ----------
     texts: List[str]
-    coords: List[Box]
+        Texts inside each bounding boxes
+    boxes: List[Box]
+        List of bounding box in unifed format (see spade.box.Box)
+    width: int
+        Image width
+    height: int
+        Image height
+    relations: Optional[List]
+        List of relation matrices, there could be many relations.
+        This is equivalent to the label (which the model have to learn).
+        Inference data might not have label.
+    """
+    texts: List[str]
+    boxes: List[Box]
     width: int
     height: int
+    relations: Optional[List]
 
 
 class RelationTagger(nn.Module):
@@ -75,7 +98,10 @@ class SpadeLoss(nn.Module):
 
 
 def preprocess(tokenizer,
-               config: dict,
+               config: Dict,
                data: SpadeData):
     #
-    text = data.text
+    texts = data.texts
+    boxes = data.boxes
+    width = data.width
+    height = data.height
