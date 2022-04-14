@@ -1,5 +1,16 @@
 import torch
 from torch import nn
+from dataclasses import dataclass
+from typing import Optional, List, Dict
+from .box import Box
+
+
+@dataclass
+class SpadeData:
+    texts: List[str]
+    coords: List[Box]
+    width: int
+    height: int
 
 
 class RelationTagger(nn.Module):
@@ -61,4 +72,10 @@ class SpadeLoss(nn.Module):
                               labels[b: b + 1, :nr, :nc])
             # loss += lf(rel[b : b + 1], labels[b : b + 1])
         return loss
-        pass
+
+
+def preprocess(tokenizer,
+               config: dict,
+               data: SpadeData):
+    #
+    text = data.text
