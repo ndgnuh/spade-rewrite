@@ -3,6 +3,8 @@ from torch import nn
 from dataclasses import dataclass
 from typing import Optional, List, Dict
 from .box import Box
+from functools import cache
+from transformers import AutoTokenizer as AutoTokenizer_
 
 
 @dataclass
@@ -97,8 +99,16 @@ class SpadeLoss(nn.Module):
         return loss
 
 
-def preprocess(tokenizer,
-               config: Dict,
+@cache
+def AutoTokenizer(*args, **kwargs):
+    """Return a pretrained tokenizer
+
+    This function is the cached version of AutoTokenizer counter part.
+    """
+    return AutoTokenizer_.from_pretrained(*args, **kwargs)
+
+
+def preprocess(config: Dict,
                data: SpadeData):
     #
     texts = data.texts
