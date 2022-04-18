@@ -103,12 +103,12 @@ class Box:
 
     # FEATURE PROPERTIES
 
-    @ cached_property
+    @cached_property
     def is_rectangle(self):
         b = self.box_type
         return b not in [BoxType.QUAD, BoxType.XY4, BoxType.X4Y4]
 
-    @ cached_property
+    @cached_property
     def center(self):
         quad = self.quad
         xs = [c[0] for c in quad]
@@ -118,7 +118,7 @@ class Box:
 
     # BASE CONVERSION
     # ALL OTHER CONVERSION ARE DERIVITIVE OF THESE TWO
-    @ cached_property
+    @cached_property
     def xyxy(self):
         bt = self.box_type
         data = self.data
@@ -146,7 +146,7 @@ class Box:
             y = [d[1] for d in data]
             return [min(x), min(y), max(x), max(y)]
 
-    @ cached_property
+    @cached_property
     def quad(self):
         bt = self.box_type
         data = self.data
@@ -174,17 +174,17 @@ class Box:
             return data
 
     # DERIVED CONVERSION
-    @ cached_property
+    @cached_property
     def xxyy(self):
         x1, y1, x2, y2 = self.xyxy
         return x1, x2, y1, y2
 
-    @ cached_property
+    @cached_property
     def xywh(self):
         x1, y1, x2, y2 = self.xyxy
         return x1, y1, x2 - x1, y2 - y1
 
-    @ cached_property
+    @cached_property
     def xy4(self):
         quad = self.quad
         x0, y0 = quad[0]
@@ -193,7 +193,7 @@ class Box:
         x3, y3 = quad[3]
         return [x0, y0, x1, y1, x2, y2, x3, y3]
 
-    @ cached_property
+    @cached_property
     def x4y4(self):
         quad = self.quad
         x0, y0 = quad[0]
