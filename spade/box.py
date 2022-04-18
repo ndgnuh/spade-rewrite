@@ -1,6 +1,8 @@
-from functools import cached_property
-from enum import Enum
+from typing import List
+from functools import cached_property, cache
+from enum import Enum, auto
 from dataclasses import dataclass
+from copy import deepcopy
 
 
 class BoxType(Enum):
@@ -27,12 +29,12 @@ class BoxType(Enum):
     XYWH:
         rectangle form: [left, top, width, height]
     """
-    XXYY = 0
-    XYXY = 1
-    XY4 = 2
-    X4Y4 = 3
-    QUAD = 4
-    XYWH = 5
+    XXYY = auto()
+    XYXY = auto()
+    XY4 = auto()
+    X4Y4 = auto()
+    QUAD = auto()
+    XYWH = auto()
 
 
 @dataclass(frozen=True, eq=True)
@@ -69,7 +71,7 @@ class Box:
         returns a new instance of Box with the internal representation
         of type `box_type`
     """
-    data: tuple
+    data: List
     box_type: BoxType
 
     # Not a property
@@ -86,8 +88,27 @@ class Box:
         data = getattr(self, name)
         return Box(data, box_type)
 
+    @cache
+    def normalize(self, width: int, height: int):
+        c0, c1, c2, c3 = deepcopy(self.quad)
+        c0[0] /= width
+        c1[0] /= width
+        c2[0] /= width
+        c3[0] /= width
+        c0[1] /= height
+        c1[1] /= height
+        c2[1] /= height
+        c3[1] /= height
+        return Box(data=[c0, c1, c2, c3], box_type=BoxType.QUAD)
+
     # FEATURE PROPERTIES
-    @cached_property
+
+    @ cached_property
+    def is_rectangle(self):
+        b = self.box_type
+        return b not in [BoxType.QUAD, BoxType.XY4, BoxType.X4Y4]
+
+    @ cached_property
     def center(self):
         quad = self.quad
         xs = [c[0] for c in quad]
@@ -97,7 +118,7 @@ class Box:
 
     # BASE CONVERSION
     # ALL OTHER CONVERSION ARE DERIVITIVE OF THESE TWO
-    @cached_property
+    @ cached_property
     def xyxy(self):
         bt = self.box_type
         data = self.data
@@ -125,7 +146,7 @@ class Box:
             y = [d[1] for d in data]
             return [min(x), min(y), max(x), max(y)]
 
-    @cached_property
+    @ cached_property
     def quad(self):
         bt = self.box_type
         data = self.data
@@ -153,17 +174,17 @@ class Box:
             return data
 
     # DERIVED CONVERSION
-    @cached_property
+    @ cached_property
     def xxyy(self):
         x1, y1, x2, y2 = self.xyxy
         return x1, x2, y1, y2
 
-    @cached_property
+    @ cached_property
     def xywh(self):
         x1, y1, x2, y2 = self.xyxy
         return x1, y1, x2 - x1, y2 - y1
 
-    @cached_property
+    @ cached_property
     def xy4(self):
         quad = self.quad
         x0, y0 = quad[0]
@@ -172,7 +193,7 @@ class Box:
         x3, y3 = quad[3]
         return [x0, y0, x1, y1, x2, y2, x3, y3]
 
-    @cached_property
+    @ cached_property
     def x4y4(self):
         quad = self.quad
         x0, y0 = quad[0]
