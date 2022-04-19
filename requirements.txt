@@ -1,0 +1,7 @@
+lenses
+numpy
+pandas
+streamlit
+torch
+transformers
+google-cloud-vision
