@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, ClassVar
 from functools import cached_property, cache
 from enum import Enum, auto
 from dataclasses import dataclass
@@ -74,9 +74,25 @@ class Box:
     data: List
     box_type: BoxType
 
-    # Not a property
     # For easy access
-    Type = BoxType
+    # Type of boxes
+    Type: ClassVar = BoxType
+
+    # Special tokens
+    @classmethod
+    @cache
+    def cls_token(class_):
+        return class_([0, 0, 0, 0], BoxType.XYXY)
+
+    @classmethod
+    @cache
+    def pad_token(class_):
+        return class_([0, 0, 0, 0], BoxType.XYXY)
+
+    @classmethod
+    @cache
+    def sep_token(class_, width, height):
+        return class_([width, height, width, height], BoxType.XYXY)
 
     # GET AROUND THE HASH WARNING
     def __hash__(self):
