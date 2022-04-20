@@ -245,7 +245,7 @@ class BrosSpade(nn.Module):
     """Model include clovaai/BROS backbone + clovaai/SPADE head.
     """
 
-    def __init__(self, config, **kwargs):
+    def __init__(self, config, fields, **kwargs):
         """
         WARNING: this doc is written as-is, the code doesn't follow this one (yet)
         Paramters
@@ -256,6 +256,8 @@ class BrosSpade(nn.Module):
 
         Configuration keys
         ----------
+        num_fields: int
+            Number of classes
         backbone: str
             Backbone name (for language hybrid layers)
         bros_backbone: str
@@ -266,9 +268,9 @@ class BrosSpade(nn.Module):
             Hidden dropout probability (default: 0.1)
         """
         super().__init__()
-        bert = config_bert._name_or_path
-        self.config_bert = config_bert
-        self.n_classes = n_classes = len(fields)
+        bert = config._name_or_path
+        self.config = config
+        self.num_fields = num_fields = len(fields)
         self.backbone = BrosModel.from_pretrained(
             "naver-clova-ocr/bros-base-uncased",
             local_files_only=True)
@@ -278,15 +280,15 @@ class BrosSpade(nn.Module):
         self.dropout = nn.Dropout(0.1)
 
         self.rel_s = RelationTagger(
-            hidden_size=config_bert.hidden_size,
-            n_fields=self.n_classes,
+            hidden_size=config.hidden_size,
+            n_fields=self.num_fields,
         )
 
         self.rel_g = RelationTagger(
-            hidden_size=config_bert.hidden_size,
-            n_fields=self.n_classes,
+            hidden_size=config.hidden_size,
+            n_fields=self.num_fields,
         )
-        self.loss = SpadeLoss(num_fields=n_fields)
+        self.loss = SpadeLoss(num_fields=num_fields)
 
     def forward(self, batch):
         batch = BatchEncoding(batch)
