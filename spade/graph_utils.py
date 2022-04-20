@@ -2,6 +2,17 @@ import torch
 
 
 def map_token(tokenizer, texts, offset=0):
+    """Map word index to token index
+
+    Parameters
+    ------------
+    tokenizer:
+        transformers tokenizer
+    texts: List[str]
+        list of texts
+    offset: int = 0
+        label offset
+    """
     map = [[i] for i in range(offset)] + [[] for _ in texts]
 
     current_node_idx = offset
@@ -24,6 +35,20 @@ def expand_relation(
     in_head=False,
     fh2a=False,
 ):
+    """Expand the relation according to their rule and the tokenizer
+
+    Paramters:
+    ------------
+    rel: np.ndarray, torch.tensor
+        The raltion relation to expand
+    node_map: List[List[int]]
+        List of token position
+    **rules:
+        If any of the key is set to true, the rule is activated
+        and the relation will be expanded that way.
+        Available keys: fh2ft, fh2lt, lh2ft, lh2lt, in_head, in_tail, fh2a
+        (f = first, l = last, h = head, a = all)
+    """
     # rel-g: first head to first tail
     # rel-s: last head to first tail + in head + in tail
     m, n = rel.shape
@@ -116,8 +141,3 @@ def graph2span_classes(adj):
             label[i] = incoming[0].item()
 
     return label
-
-
-# span = g_to_span(span_adj)
-# new_adj = expand(torch.tensor(data.label[0]), map_token(tokenizer, data.text, offset=len(data.fields)), lh2ft=True, in_head=True, in_tail=True)
-# show_con(new_adj, data.fields, tokens)
