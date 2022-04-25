@@ -78,7 +78,7 @@ class RelationTagger(nn.Module):
 
 
 def partially_from_pretrained(config, model_name, **kwargs):
-    pretrain = AutoModel.from_pretrained(model_name, **kwargs)
+    pretrain = BrosModel.from_pretrained(model_name, **kwargs)
     model = type(pretrain)(config)
     pretrain_sd = pretrain.state_dict()
     for (k, v) in model.named_parameters():
@@ -116,6 +116,8 @@ def parse_input(
     sep_token_box=None,
     pad_token_box=[0] * 8,
 ):
+    if label is None:
+        label = torch.zeros(2, len(fields) + config.max_position_embeddings, config.max_position_embeddings, dtype=torch.long)
     width, height = image.size
     if sep_token_box is None:
         sep_token_box = [width, height] * 4
@@ -308,12 +310,12 @@ class BrosSpade(nn.Module):
         bert = config_bert._name_or_path
         self.config_bert = config_bert
         self.n_classes = n_classes = len(fields)
-        self.backbone = BrosModel.from_pretrained(
-            "naver-clova-ocr/bros-base-uncased",
-            local_files_only=True)
-        bert = AutoModel.from_pretrained(bert,
-                                         local_files_only=True)
-        self.backbone.embeddings.word_embeddings = bert.embeddings.word_embeddings
+        self.backbone = partially_from_pretrained(config_bert, "naver-clova-ocr/bros-base-uncased", local_files_only=True)
+            # num_hidden_layers=9,
+            
+        # bert = AutoModel.from_pretrained(bert,
+        #                                  local_files_only=True)
+        # self.backbone.embeddings.word_embeddings = bert.embeddings.word_embeddings
         self.dropout = nn.Dropout(0.1)
 
         self.rel_s = RelationTagger(

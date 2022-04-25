@@ -285,6 +285,7 @@ def hybrid_layoutlm(config_layoutlm, config_bert, layoutlm, bert, **kwargs):
     layoutlm = partially_from_pretrained(config_layoutlm, layoutlm, **kwargs)
     layoutlm.embeddings.word_embeddings = bert.embeddings.word_embeddings
     layoutlm.embeddings.position_embeddings = bert.embeddings.position_embeddings
+    layoutlm.embeddings.position_ids = bert.embeddings.position_ids
     return layoutlm
 
 

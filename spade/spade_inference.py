@@ -25,14 +25,15 @@ def infer_single(model, tokenizer, dataset, i):
         out = model(batch)
         # rel_s_score = out.rel[0][0, 1].detach()
         # rel_g_score = out.rel[1][0, 1].detach()
-        rel_s = out.rel[0].argmax(dim=1)[0].detach()
-        rel_g = out.rel[1].argmax(dim=1)[0].detach()
+        rel_s = out.rel[0].argmax(dim=1)[0].detach().cpu()
+        rel_g = out.rel[1].argmax(dim=1)[0].detach().cpu()
 
     data_id = dataset.raw[i]["data_id"]
     classification, has_loop = post_process(
         tokenizer, rel_s, rel_g, batch, dataset.fields
     )
-    return classification
+    return classification,rel_s, rel_g
+
 
 
 def post_process(tokenizer, rel_s, rel_g, batch, fields):
@@ -114,12 +115,13 @@ def post_process(tokenizer, rel_s, rel_g, batch, fields):
             input_ids_i = [input_ids[j] for j in tail]
             input_ids_i = [id for id in input_ids_i if id not in ignore_input_ids]
             texts = tokenizer.decode(input_ids_i)
-            field = fields[itc[i]]
+            field = fields[itc[i]] 
             # ignore empty fields
             if len(texts) > 0:
                 # change dict to tuple for better data structure
                 # or change current_classification to dict
-                current_classification.append({field: texts})
+
+                current_classification.append((field, texts))
 
         if len(current_classification) > 0:
             classification.append(current_classification)
