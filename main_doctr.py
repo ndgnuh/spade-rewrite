@@ -11,11 +11,13 @@ from pprint import pformat
 from detect.ocr import *
 import spade.transforms as transforms
 from spade.models import SpadeData
-checkpoint_path="../best_score_parse.pt"
+from spade.bros.bros import BrosConfig
+import time
+checkpoint_path="../../spade-rewrite/checkpoint-bros-vninvoice-2/best_score_parse.pt"
 os.system("clear")
 st.set_page_config(layout="wide")
-# os.environ['GOOGLE_APPLICATION_CREDENTIALS'] =\
-#     '/home/hung/grooo-gkeys.json'
+os.environ['GOOGLE_APPLICATION_CREDENTIALS'] =\
+    '../../Invoice_template/key/grooo-gkeys.json'
 
 st.header("Trích xuất hóa đơn")
 
@@ -54,39 +56,59 @@ def ocr_doctr(image):
     return bboxes,raw_text,h,w
 
 fields = [
-    "store.name",
-    "store.address",
-    "store.phone",
-    "menu.name",
+    "info.date",
+    "info.form",
+    "info.serial",
+    "info.num",
+    "seller.name",
+    "seller.company",
+    "seller.tax",
+    "seller.tel",
+    "seller.address",
+    "seller.bank",
+    "customer.name",
+    "customer.company",
+    "customer.tax",
+    "customer.tel",
+    "customer.address",
+    "customer.bank",
+    "customer.payment_method",
     "menu.id",
-    "menu.count",
+    "menu.description",
     "menu.unit",
-    "menu.unitprice",
-    "menu.price",
-    "menu.discount",
-    "subtotal.tax",
-    "subtotal.count",
-    "subtotal.discount",
-    "subtotal.service",
-    "subtotal.price",
-    "total.price",
-    "total.currency",
-    "total.cash",
-    "total.credit",
-    "total.change",
-    "info.transaction",
-    "info.customer",
-    "info.time",
-    "info.staff",
-    "total.price_label",
-    "total.cash_label",
-    "total.change_label"]
+    "menu.quantity",
+    "menu.unit_price",
+    "menu.subtotal",
+    "menu.vat_rate",
+    "menu.vat",
+    "menu.total",
+    "total.subtotal",
+    "total.vat_rate",
+    "total.vat",
+    "total.total"]
 
 
-@st.experimental_singleton
+# @st.experimental_singleton
 def get_model():
-    config = AutoConfig.from_pretrained("vinai/phobert-base")
-    model = models.BrosSpade(config, fields=fields)
+    tokenizer = AutoConfig.from_pretrained("vinai/phobert-base")
+
+    NUM_HIDDEN_LAYERS=9
+    max_epoch = 2000
+    MAX_POSITION_EMBEDDINGS = 700
+    if NUM_HIDDEN_LAYERS > 0:
+        config_bert = BrosConfig.from_pretrained(
+            "naver-clova-ocr/bros-base-uncased",
+            num_hidden_layers=NUM_HIDDEN_LAYERS,
+            max_position_embeddings=MAX_POSITION_EMBEDDINGS,
+            vocab_size=tokenizer.vocab_size-1,
+        )
+    else:
+        config_bert = BrosConfig.from_pretrained(
+            "naver-clova-ocr/bros-base-uncased",
+            max_position_embeddings=MAX_POSITION_EMBEDDINGS,
+            vocab_size=tokenizer.vocab_size-1,
+        )
+    model = models.BrosSpade(config_bert, fields=fields)
     sd = torch.load(checkpoint_path, map_location='cpu')
     model.load_state_dict(sd, strict=False)
     return model
@@ -120,11 +142,18 @@ else:
 
 if submit:
     with st.spinner(text="OCR..."):
+        a = time.time()
         bboxes,raw_text,h,w=ocr_doctr(image.getvalue())
         
         input_data=transforms.from_doctr(bboxes,raw_text,h,w)
+        b = time.time()
+        print("Doctr+vietocr: ",b-a)
+        res = ocr(image.getvalue())
+        input_data = transforms.from_google(res)
+        c = time.time()
+        print("GG-API: ",c-b)
     with st.spinner(text="Extracting features..."):
-        import time
+        
         a = time.time()
         batch = models.preprocess({
             "bbox_type": "xy4",

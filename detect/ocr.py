@@ -10,24 +10,24 @@ from doctr.models import detection_predictor
 from vietocr.tool.predictor import Predictor
 from vietocr.tool.config import Cfg
 
-config = Cfg.load_config_from_name('vgg_transformer')
-config['weights'] = 'https://drive.google.com/uc?id=13327Y1tz1ohsm5YZMyXVMPIOjoOA0OaA'
-config['cnn']['pretrained']=False
-config['device'] = 'cuda:0'
-config['predictor']['beamsearch']=False
-detector = Predictor(config)
+# config = Cfg.load_config_from_name('vgg_transformer')
+# config['weights'] = 'https://drive.google.com/uc?id=13327Y1tz1ohsm5YZMyXVMPIOjoOA0OaA'
+# config['cnn']['pretrained']=False
+# config['device'] = 'cuda:0'
+# config['predictor']['beamsearch']=False
+# detector = Predictor(config)
 
 
 
 
 
 
-def Vietocr_img(img,bboxes):
+def Vietocr_img(img,bboxes,detector_vietocr):
     raw_text=[]
     for box in bboxes:
         img_box=img[box[2]:box[3],box[0]:box[1]]
         img_box=Image.fromarray(img_box)
-        text=detector.predict(img_box)
+        text=detector_vietocr.predict(img_box)
         if text==[]:
             raw_text.append("?")
             continue

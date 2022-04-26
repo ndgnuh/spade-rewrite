@@ -241,12 +241,23 @@ def preprocess(config: Dict,
         "bbox": tensorize(token_boxes).unsqueeze(0),
     })
 
+def partially_from_pretrained(config, model_name, **kwargs):
+    pretrain = BrosModel.from_pretrained(model_name, **kwargs)
+    model = type(pretrain)(config)
+    pretrain_sd = pretrain.state_dict()
+    for (k, v) in model.named_parameters():
+        if k not in pretrain_sd:
+            continue
+        if pretrain_sd[k].data.shape == v.shape:
+            v.data = pretrain_sd[k].data
+
+    return model
 
 class BrosSpade(nn.Module):
     """Model include clovaai/BROS backbone + clovaai/SPADE head.
     """
 
-    def __init__(self, config, fields, **kwargs):
+    def __init__(self, config_bert, fields, **kwargs):
         """
         WARNING: this doc is written as-is, the code doesn't follow this one (yet)
         Paramters
@@ -269,27 +280,27 @@ class BrosSpade(nn.Module):
             Hidden dropout probability (default: 0.1)
         """
         super().__init__()
-        bert = config._name_or_path
-        self.config = config
-        self.num_fields = num_fields = len(fields)
-        self.backbone = BrosModel.from_pretrained(
-            "naver-clova-ocr/bros-base-uncased",
-            local_files_only=True)
-        bert = AutoModel.from_pretrained(bert,
-                                         local_files_only=True)
-        self.backbone.embeddings.word_embeddings = bert.embeddings.word_embeddings
+        bert = config_bert._name_or_path
+        self.config_bert = config_bert
+        self.n_classes = n_classes = len(fields)
+        self.backbone = partially_from_pretrained(config_bert, "naver-clova-ocr/bros-base-uncased", local_files_only=False)
+            # num_hidden_layers=9,
+            
+        # bert = AutoModel.from_pretrained(bert,
+        #                                  local_files_only=True)
+        # self.backbone.embeddings.word_embeddings = bert.embeddings.word_embeddings
         self.dropout = nn.Dropout(0.1)
 
         self.rel_s = RelationTagger(
-            hidden_size=config.hidden_size,
-            n_fields=self.num_fields,
+            hidden_size=config_bert.hidden_size,
+            n_fields=self.n_classes,
         )
 
         self.rel_g = RelationTagger(
-            hidden_size=config.hidden_size,
-            n_fields=self.num_fields,
+            hidden_size=config_bert.hidden_size,
+            n_fields=self.n_classes,
         )
-        self.loss = SpadeLoss(num_fields=num_fields)
+        self.loss = SpadeLoss(num_fields=self.n_classes)
 
     def forward(self, batch):
         batch = BatchEncoding(batch)
