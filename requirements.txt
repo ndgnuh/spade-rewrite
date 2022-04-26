@@ -5,3 +5,6 @@ streamlit
 torch
 transformers
 google-cloud-vision
+python-doctr[torch]
+vietocr
+pyvi

@@ -2,7 +2,6 @@ from lenses import lens
 from .box import Box
 from .models import SpadeData
 
-
 def from_google(response):
     def box_from_google_api_poly(poly):
         #   [{'x': 25, 'y': 446},
@@ -31,3 +30,12 @@ def from_google(response):
                      width=w,
                      height=h,
                      relations=None)
+
+def from_doctr(bboxes,raw_text,h,w): #and vietocr
+    new_boxes=[Box(box, Box.Type.XXYY) for box in bboxes]
+    return SpadeData(texts=raw_text,
+                     boxes=new_boxes,
+                     width=w,
+                     height=h,
+                     relations=None)
+
