@@ -16,8 +16,8 @@ import time
 checkpoint_path="../../spade-rewrite/checkpoint-bros-vninvoice-2/best_score_parse.pt"
 os.system("clear")
 st.set_page_config(layout="wide")
-os.environ['GOOGLE_APPLICATION_CREDENTIALS'] =\
-    '../../Invoice_template/key/grooo-gkeys.json'
+# os.environ['GOOGLE_APPLICATION_CREDENTIALS'] =\
+#     '../../Invoice_template/key/grooo-gkeys.json'
 
 st.header("Trích xuất hóa đơn")
 
@@ -148,10 +148,10 @@ if submit:
         input_data=transforms.from_doctr(bboxes,raw_text,h,w)
         b = time.time()
         print("Doctr+vietocr: ",b-a)
-        res = ocr(image.getvalue())
-        input_data = transforms.from_google(res)
-        c = time.time()
-        print("GG-API: ",c-b)
+#         res = ocr(image.getvalue())
+#         input_data = transforms.from_google(res)
+#         c = time.time()
+#         print("GG-API: ",c-b)
     with st.spinner(text="Extracting features..."):
         
         a = time.time()
