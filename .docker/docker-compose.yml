@@ -12,3 +12,4 @@ services:
       - ..:/workspace/
     ports:
       - 8501:8501
+      - 8000:8000
