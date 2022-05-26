@@ -143,7 +143,7 @@ def convert2spadedata(response: vision.AnnotateFileResponse, width, height):
     for text in texts:
         data['text'].append(text['description'])
         data['coord'].append([[pt['x'], pt['y']]
-                             for pt in text['boundingPoly']['vertices']])
+                              for pt in text['boundingPoly']['vertices']])
 
     data['vertical'] = [False for _ in data['text']]
     data['img_feature'] = None
@@ -259,7 +259,7 @@ def main():
     config = utils.read_config("config/vi-invoice.yaml")
 
     app = create_app(config)
-    start_app(app)
+    start_app(app, host="0.0.0.0")
 
 
 if __name__ == "__main__":
