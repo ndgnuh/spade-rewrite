@@ -7,7 +7,9 @@ RUN pip install -r requirements.txt
 RUN apt-get update
 RUN apt-get install neovim tmux\
 	python3-opencv \
+	curl \
 	bash bash-completion -y
 RUN chsh -s $(which bash)
+
 ENTRYPOINT ["bash"]
 CMD ["read"]
