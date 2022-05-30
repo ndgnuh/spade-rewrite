@@ -2,7 +2,6 @@ import torch
 import spade.models as models
 import streamlit as st
 import json
-from google.cloud import vision
 import os
 from transformers import AutoConfig
 import spade.transforms as transforms
