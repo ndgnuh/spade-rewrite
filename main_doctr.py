@@ -96,7 +96,7 @@ fields = [
     "total.total"]
 
 
-# @st.experimental_singleton
+@st.experimental_singleton
 def get_model():
     tokenizer = AutoConfig.from_pretrained("vinai/phobert-base")
 
