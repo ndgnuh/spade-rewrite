@@ -26,7 +26,10 @@ config = Cfg.load_config_from_name('vgg_seq2seq')
 config['weights'] = 'https://drive.google.com/uc?id=1nTKlEog9YFK74kPyX0qLwCWi60_YHHk4'
 
 config['cnn']['pretrained'] = False
-config['device'] = 'cuda:0'
+if torch.cuda.is_available():
+    config['device'] = 'cuda'
+else:
+    config['device'] = 'cpu'
 config['predictor']['beamsearch'] = False
 detector_vietocr = Predictor(config)
 
