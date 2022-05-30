@@ -13,7 +13,7 @@ import spade.transforms as transforms
 from spade.models import SpadeData
 from spade.bros.bros import BrosConfig
 import time
-checkpoint_path = "../../spade-rewrite/checkpoint-bros-vninvoice-2/best_score_parse.pt"
+checkpoint_path = "weights/best_score_parse.pt"
 os.system("clear")
 st.set_page_config(layout="wide")
 # os.environ['GOOGLE_APPLICATION_CREDENTIALS'] =\
