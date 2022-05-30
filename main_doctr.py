@@ -21,8 +21,11 @@ st.set_page_config(layout="wide")
 
 st.header("Trích xuất hóa đơn")
 
-config = Cfg.load_config_from_name('vgg_transformer')
-config['weights'] = 'https://drive.google.com/uc?id=13327Y1tz1ohsm5YZMyXVMPIOjoOA0OaA'
+# config = Cfg.load_config_from_name('vgg_transformer')
+config = Cfg.load_config_from_name('vgg_seq2seq')
+# config['weights'] = 'https://drive.google.com/uc?id=13327Y1tz1ohsm5YZMyXVMPIOjoOA0OaA'
+config['weights'] = 'https://drive.google.com/uc?id=1nTKlEog9YFK74kPyX0qLwCWi60_YHHk4'
+
 config['cnn']['pretrained']=False
 config['device'] = 'cuda:0'
 config['predictor']['beamsearch']=False
