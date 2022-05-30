@@ -1,8 +1,12 @@
 from typing import List, ClassVar
-from functools import cached_property, cache
+from functools import cached_property
 from enum import Enum, auto
 from dataclasses import dataclass
 from copy import deepcopy
+try:
+    from functools import cache
+except Exception:
+    from functools import lru_cache as cache
 
 
 class BoxType(Enum):

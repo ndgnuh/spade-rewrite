@@ -4,11 +4,14 @@ from torch import nn
 from dataclasses import dataclass
 from typing import Optional, List, Dict
 from argparse import Namespace
-from functools import cache
 from transformers import AutoTokenizer as AutoTokenizer_, BatchEncoding, AutoModel
 from .graph_utils import expand_relation
 from .bros.bros import BrosModel
 from .box import Box
+try:
+    from functools import cache
+except Exception:
+    from functools import lru_cache as cache
 
 
 @dataclass
@@ -273,10 +276,8 @@ class BrosSpade(nn.Module):
         self.config = config
         self.num_fields = num_fields = len(fields)
         self.backbone = BrosModel.from_pretrained(
-            "naver-clova-ocr/bros-base-uncased",
-            local_files_only=True)
-        bert = AutoModel.from_pretrained(bert,
-                                         local_files_only=True)
+            "naver-clova-ocr/bros-base-uncased")
+        bert = AutoModel.from_pretrained(bert)
         self.backbone.embeddings.word_embeddings = bert.embeddings.word_embeddings
         self.dropout = nn.Dropout(0.1)
 
