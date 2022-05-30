@@ -12,6 +12,8 @@ COPY requirements.txt .
 RUN cat requirements.txt | grep -v torch | tee requirements.txt
 RUN pip install -r requirements.txt
 
+RUN mkdir /root/working
+WORKDIR /root/working
 COPY . .
 
-CMD ["python", "main_doctr.py"]
+CMD ["streamlit", "run", "main_doctr.py"]
