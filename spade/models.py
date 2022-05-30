@@ -4,7 +4,7 @@ from torch import nn
 from dataclasses import dataclass
 from typing import Optional, List, Dict
 from argparse import Namespace
-from functools import cache
+from functools import lru_cache as cache
 from transformers import AutoTokenizer as AutoTokenizer_, BatchEncoding, AutoModel
 from .graph_utils import expand_relation
 from .bros.bros import BrosModel
@@ -241,6 +241,7 @@ def preprocess(config: Dict,
         "bbox": tensorize(token_boxes).unsqueeze(0),
     })
 
+
 def partially_from_pretrained(config, model_name, **kwargs):
     pretrain = BrosModel.from_pretrained(model_name, **kwargs)
     model = type(pretrain)(config)
@@ -252,6 +253,7 @@ def partially_from_pretrained(config, model_name, **kwargs):
             v.data = pretrain_sd[k].data
 
     return model
+
 
 class BrosSpade(nn.Module):
     """Model include clovaai/BROS backbone + clovaai/SPADE head.
@@ -283,9 +285,10 @@ class BrosSpade(nn.Module):
         bert = config_bert._name_or_path
         self.config_bert = config_bert
         self.n_classes = n_classes = len(fields)
-        self.backbone = partially_from_pretrained(config_bert, "naver-clova-ocr/bros-base-uncased", local_files_only=False)
-            # num_hidden_layers=9,
-            
+        self.backbone = partially_from_pretrained(
+            config_bert, "naver-clova-ocr/bros-base-uncased", local_files_only=False)
+        # num_hidden_layers=9,
+
         # bert = AutoModel.from_pretrained(bert,
         #                                  local_files_only=True)
         # self.backbone.embeddings.word_embeddings = bert.embeddings.word_embeddings
