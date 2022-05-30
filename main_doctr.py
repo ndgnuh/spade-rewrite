@@ -13,7 +13,7 @@ import spade.transforms as transforms
 from spade.models import SpadeData
 from spade.bros.bros import BrosConfig
 import time
-checkpoint_path="../../spade-rewrite/checkpoint-bros-vninvoice-2/best_score_parse.pt"
+checkpoint_path = "../../spade-rewrite/checkpoint-bros-vninvoice-2/best_score_parse.pt"
 os.system("clear")
 st.set_page_config(layout="wide")
 # os.environ['GOOGLE_APPLICATION_CREDENTIALS'] =\
@@ -26,9 +26,9 @@ config = Cfg.load_config_from_name('vgg_seq2seq')
 # config['weights'] = 'https://drive.google.com/uc?id=13327Y1tz1ohsm5YZMyXVMPIOjoOA0OaA'
 config['weights'] = 'https://drive.google.com/uc?id=1nTKlEog9YFK74kPyX0qLwCWi60_YHHk4'
 
-config['cnn']['pretrained']=False
+config['cnn']['pretrained'] = False
 config['device'] = 'cuda:0'
-config['predictor']['beamsearch']=False
+config['predictor']['beamsearch'] = False
 detector_vietocr = Predictor(config)
 
 
@@ -39,24 +39,27 @@ def ocr(content: bytes):
     response = client.text_detection(image=image)
     return json.loads(type(response).to_json(response))
 
+
 def ocr_doctr(image):
-    model_doctr = detection_predictor(arch='db_resnet50', pretrained=True,assume_straight_pages=True)
-    doct_img=DocumentFile.from_images(image)
-    result=model_doctr(doct_img)
-    img_copy=doct_img[0].copy()
-    h,w,c=doct_img[0].shape
-    bboxes=[]
+    model_doctr = detection_predictor(
+        arch='db_resnet50', pretrained=True, assume_straight_pages=True)
+    doct_img = DocumentFile.from_images(image)
+    result = model_doctr(doct_img)
+    img_copy = doct_img[0].copy()
+    h, w, c = doct_img[0].shape
+    bboxes = []
     for box in result[0]:
-        x1=int(box[0]*w)
-        y1=int(box[1]*h)
-        x2=int(box[2]*w)
-        y2=int(box[3]*h)
+        x1 = int(box[0]*w)
+        y1 = int(box[1]*h)
+        x2 = int(box[2]*w)
+        y2 = int(box[3]*h)
         # bboxes.append([x1,x2,y1,y2])
-        bboxes.insert(0,[x1,x2,y1,y2])
-        img_copy=bounding_box(x1,y1,x2,y2,img_copy)
+        bboxes.insert(0, [x1, x2, y1, y2])
+        img_copy = bounding_box(x1, y1, x2, y2, img_copy)
     st.image(img_copy, caption='Boxed_image')
-    raw_text=Vietocr_img(img_copy,bboxes,detector_vietocr)
-    return bboxes,raw_text,h,w
+    raw_text = Vietocr_img(img_copy, bboxes, detector_vietocr)
+    return bboxes, raw_text, h, w
+
 
 fields = [
     "info.date",
@@ -95,7 +98,7 @@ fields = [
 def get_model():
     tokenizer = AutoConfig.from_pretrained("vinai/phobert-base")
 
-    NUM_HIDDEN_LAYERS=9
+    NUM_HIDDEN_LAYERS = 9
     max_epoch = 2000
     MAX_POSITION_EMBEDDINGS = 700
     if NUM_HIDDEN_LAYERS > 0:
@@ -123,7 +126,7 @@ with st.spinner(text="Loading model"):
 
 with st.spinner(text="Loading tokenizer"):
     tokenizer = st.experimental_singleton(models.AutoTokenizer)(
-        "vinai/phobert-base", local_files_only=True)
+        "vinai/phobert-base")
     st.success("Tokenizer loaded")
 
 upload_methods = ["Từ thư viện trong máy", "Chụp ảnh mới"]
@@ -146,17 +149,17 @@ else:
 if submit:
     with st.spinner(text="OCR..."):
         a = time.time()
-        bboxes,raw_text,h,w=ocr_doctr(image.getvalue())
-        
-        input_data=transforms.from_doctr(bboxes,raw_text,h,w)
+        bboxes, raw_text, h, w = ocr_doctr(image.getvalue())
+
+        input_data = transforms.from_doctr(bboxes, raw_text, h, w)
         b = time.time()
-        print("Doctr+vietocr: ",b-a)
+        print("Doctr+vietocr: ", b-a)
 #         res = ocr(image.getvalue())
 #         input_data = transforms.from_google(res)
 #         c = time.time()
 #         print("GG-API: ",c-b)
     with st.spinner(text="Extracting features..."):
-        
+
         a = time.time()
         batch = models.preprocess({
             "bbox_type": "xy4",
