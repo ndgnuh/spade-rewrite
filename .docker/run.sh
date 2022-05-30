@@ -1,4 +1,4 @@
 #!/bin/sh
 
 VERSION=$(cat .docker/VERSION)
-docker run --rm $VERSION
+docker run --port 8501:8501 --rm $VERSION
