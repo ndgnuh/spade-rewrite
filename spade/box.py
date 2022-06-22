@@ -1,5 +1,6 @@
 from typing import List, ClassVar
-from functools import cached_property, cache
+from functools import cached_property
+from functools import lru_cache as cache
 from enum import Enum, auto
 from dataclasses import dataclass
 from copy import deepcopy

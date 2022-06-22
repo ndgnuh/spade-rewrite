@@ -4,7 +4,7 @@ pandas
 streamlit
 torch
 transformers
-google-cloud-vision
+python-doctr
 python-doctr[torch]
 vietocr
 pyvi
