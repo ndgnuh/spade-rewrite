@@ -93,7 +93,6 @@ if submit:
     with st.spinner(text="OCR..."):
         res = ocr(image.getvalue())
         input_data = transforms.from_google(res)
-
     with st.spinner(text="Extracting features..."):
         import time
         a = time.time()

@@ -31,6 +31,36 @@ def from_google(response):
                      height=h,
                      relations=None)
 
+def from_google_gcn(response):
+    def box_from_google_api_poly(poly):
+        #   [{'x': 25, 'y': 446},
+        #    {'x': 549, 'y': 446},
+        #    {'x': 549, 'y': 1234},
+        #    {'x': 25, 'y': 1234}]
+        x = [p['x'] for p in poly]
+        y = [p['y'] for p in poly]
+        return Box(x + y, Box.Type.X4Y4)
+
+    boxes_focus = lens['textAnnotations'].Each()['boundingPoly']['vertices'].F(
+        box_from_google_api_poly).collect()
+    texts_focus = lens['textAnnotations'].Each()['description'].collect()
+
+    boxes = boxes_focus(response)
+    x0, y0, w, h = boxes[0].xywh
+
+    def normalize(b):
+        x = [max(x - x0, 0) for x in b.x4y4[:4]]
+        y = [max(y - y0, 0) for y in b.x4y4[4:]]
+        return Box(x + y, Box.Type.X4Y4)
+    # boxes = [normalize(b) for b in boxes]
+
+    new_boxes=[Box(box.quad, Box.Type.QUAD) for box in boxes]
+    return SpadeData(texts=texts_focus(response)[1:],
+                     boxes=new_boxes[1:],
+                     width=w,
+                     height=h,
+                     relations=None)
+
 def from_doctr(bboxes,raw_text,h,w): #and vietocr
     new_boxes=[Box(box, Box.Type.XXYY) for box in bboxes]
     return SpadeData(texts=raw_text,
@@ -39,3 +69,15 @@ def from_doctr(bboxes,raw_text,h,w): #and vietocr
                      height=h,
                      relations=None)
 
+def from_doctr_gcn(bboxes,raw_text,h,w): #and vietocr
+    print("Old bboxes: ",bboxes[0])
+
+    new_boxes=[Box(box, Box.Type.XXYY) for box in bboxes]
+
+    new_boxes_2=[Box(box.quad, Box.Type.QUAD) for box in new_boxes]
+    print("New bboxes: ",new_boxes_2[0])
+    return SpadeData(texts=raw_text,
+                     boxes=new_boxes_2,
+                     width=w,
+                     height=h,
+                     relations=None)

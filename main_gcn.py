@@ -29,7 +29,7 @@ from spade_gcn.spade_inference import post_process
 import json
 
 # checkpoint_path="../../spade-rewrite/checkpoint-bros-vnbill/best_score_parse_vnbill.pt"
-checkpoint_path="./checkpoint-gcn-vninvoice-13/best_score_parse.pt"
+checkpoint_path="./checkpoint-gcn-vninvoice-13/best_score_parse_gcn.pt"
 os.system("clear")
 st.set_page_config(layout="wide")
 os.environ['GOOGLE_APPLICATION_CREDENTIALS'] =\
