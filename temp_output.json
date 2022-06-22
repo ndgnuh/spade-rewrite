@@ -1,0 +1,59 @@
+{
+  "main_info": {
+    "info.date": "Ngày 14 tháng 12 năm 2018",
+    "info.sign_date": null,
+    "info.form": "IC23LBB/004",
+    "info.serial": "OD/22T",
+    "info.num": "000318",
+    "seller.company": null,
+    "seller.tax": "37030457thuế61",
+    "seller.address": "Đường Tân Hiệp 38 Khu phố Tân Long Tần P Hiệp Tính Bình Dương",
+    "customer.company": "CÔNG TY NEIR THƯƠNG MẠI DỊCH VỤ VẬN TÁI PHÚC HOA LONG",
+    "customer.tax": "31720thuế303 8@@",
+    "customer.address": "Số 373/1/2A Lý Thường Kiệt P9 Quận Tân Bình TPHÔ Chí Minh"
+  },
+  "menu_true": {
+    "description": [
+      "Máy Đánh trưng Câm Tay",
+      "Lêu CTrại Lêu Dã Ngoại ăm",
+      "Bìa Lá Nhựa A4",
+      "Bim bim cánh gà Nguyên ưa Vi n@@",
+      "Đậu"
+    ],
+    "unit_price": [
+      99000,
+      645000,
+      1450,
+      1850,
+      30000
+    ],
+    "quantity": [
+      3,
+      10,
+      3,
+      6,
+      3
+    ],
+    "subtotal": [
+      297000,
+      6450000,
+      4350,
+      11100,
+      90000
+    ],
+    "vat_rate": []
+  },
+  "menu_false": {
+    "description": [],
+    "unit_price": [],
+    "quantity": [],
+    "subtotal": [],
+    "vat_rate": []
+  },
+  "total": {
+    "total.subtotal": "6852450",
+    "total.vat_rate": null,
+    "total.vat": "O",
+    "total.total": "6852450"
+  }
+}
