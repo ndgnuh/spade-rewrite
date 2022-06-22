@@ -10,6 +10,7 @@ from .graph_utils import expand_relation
 from .bros.bros import BrosModel
 from .box import Box
 
+from spade_gcn.model_gnn import batch_parse_input,parse_input
 
 @dataclass
 class SpadeData:
@@ -241,6 +242,118 @@ def preprocess(config: Dict,
         "bbox": tensorize(token_boxes).unsqueeze(0),
     })
 
+
+def preprocess_gcn(config1: Dict,
+                config: Dict,
+               data: SpadeData):
+    """Preprocess data before put inside spade
+
+    Parameters:
+    ----------
+    config: dict
+        Configuration, must have the keys:
+        - tokenizer: str (tokenizer name)
+        - max_position_embeddings: int
+        - bbox_type: Box.Type
+        - relation_expansions: (unused for now)
+    data: SpadeData
+        Data to be processed
+    """
+    # Context
+    texts = data.texts
+    boxes = data.boxes
+    width = data.width
+    height = data.height
+    fields= config1['fields']
+    tokenizer = AutoTokenizer(config1['tokenizer'])
+
+    batch = []
+    text_tokens = []
+    texts = texts
+    actual_boxes = [box.data for box in boxes]
+    features = parse_input(width,
+                            height,
+                            texts,
+                            actual_boxes,
+                            tokenizer,
+                            config=config,
+                            label=None,
+                            fields=fields)
+    # text_tokens.append(features.pop("text_tokens"))
+    # batch.append(features)
+    text_tokens=features.pop("text_tokens")
+    batch=features
+
+    return BatchEncoding(batch)
+
+    # boxes = [b.normalize(width, height) for b in boxes]
+    # # token_map = G.map_token(tokenizer, texts, offset=len(config['num_fields']))
+
+    # #== TOKENIZE ==#
+    # tokens = []
+    # token_boxes = []
+    # token_types = []
+    # for text, box in zip(texts, boxes):
+    #     text_tokens = tokenizer.tokenize(text)
+    #     num_tokens = len(text_tokens)
+    #     tokens.extend(text_tokens)
+    #     token_boxes.extend([box] * num_tokens)
+    #     token_types.extend([1] + [0] * (num_tokens - 1))
+    # input_masks = [1] * len(tokens)
+
+    # if relations is not None:
+    #     # PROBLEM:
+    #     # Each relation has their own way of expanding the graph
+    #     # so we define some extra input here
+    #     expansions = config['relation_expansions']
+    #     for i, relation in enumerate(relations):
+    #         relations[i] = \
+    #             expand_relation(relation, token_map, **expansions[i])
+
+    # # PADDING
+    # special_tokens_count = 2
+    # true_length = config['max_position_embeddings'] - special_tokens_count
+    # if len(tokens) > true_length:
+    #     tokens = tokens[:true_length]
+    #     token_boxes = token_boxes[:true_length]
+    #     token_types = token_types[:true_length]
+    #     input_masks = input_masks[:true_length]
+
+    # # SEP TOKEN
+    # tokens += [tokenizer.sep_token]
+    # input_masks += [1]
+    # token_boxes += [Box.sep_token(width, height)]
+    # token_types += [1]
+
+    # # CLS token
+    # tokens = [tokenizer.cls_token] + tokens
+    # token_boxes = [Box.cls_token()] + token_boxes
+    # input_masks = input_masks + [0]
+    # token_types = [2] + token_types
+
+    # # PAD TOKEN
+    # padding_length = config['max_position_embeddings'] - len(tokens)
+    # tokens += [tokenizer.pad_token] * padding_length
+    # input_masks += [0] * padding_length
+    # token_boxes += [Box.pad_token()] * padding_length
+    # token_types += [3] * padding_length
+
+    # # BOUNDING BOX FORMAT
+    # token_boxes = [getattr(b, config['bbox_type']) for b in token_boxes]
+
+    # # INPUT IDS
+    # input_ids = tokenizer.convert_tokens_to_ids(tokens)
+
+    # def tensorize(x):
+    #     return torch.tensor((x))
+
+    # return BatchEncoding({
+    #     "input_ids": tensorize(input_ids).unsqueeze(0),
+    #     "attention_mask": tensorize(input_masks).unsqueeze(0),
+    #     "token_type_ids": tensorize(token_types).unsqueeze(0),
+    #     "bbox": tensorize(token_boxes).unsqueeze(0),
+    # })
+
 def partially_from_pretrained(config, model_name, **kwargs):
     pretrain = BrosModel.from_pretrained(model_name, **kwargs)
     model = type(pretrain)(config)
@@ -287,7 +400,7 @@ class BrosSpade(nn.Module):
             # num_hidden_layers=9,
             
         # bert = AutoModel.from_pretrained(bert,
-        #                                  local_files_only=True)
+        #                                  local_files_only=False)
         # self.backbone.embeddings.word_embeddings = bert.embeddings.word_embeddings
         self.dropout = nn.Dropout(0.1)
 
