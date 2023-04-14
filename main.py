@@ -1,33 +1,37 @@
-# from kie.models import build_model
-from kie.utils import process_input, read_jsonl, Timer
-from transformers import AutoTokenizer
-import time
-import icecream
-import numpy as np
-icecream.install()
+from kie import configs
+from argparse import ArgumentParser
 
+def train(args):
+    model_config = configs.read_model_config(args["model_config"])
+    config = configs.read_training_config(args["training_config"])
+    config['model'] = model_config
 
-sample = read_jsonl("data/sample.jsonl")[0]
-ic(read_jsonl("data/sample.jsonl")[0].keys())
+    from kie.models import Trainer
+    trainer = Trainer(config)
+    trainer.fit()
 
-tokenizer = AutoTokenizer.from_pretrained("vinai/phobert-base")
-n = 1000
-with Timer("Total"):
-    polygons = np.array(sample['coord']) * 1.0
-    polygons[..., 0] = polygons[..., 0] / sample['img_sz']['width']
-    polygons[..., 1] = polygons[..., 1] / sample['img_sz']['height']
-    inputs = process_input(
-        tokenizer=tokenizer,
-        texts=sample['text'],
-        polygons=polygons
-    )
-# config = dict(
-#     num_classes=7,
-#     head_size=256
-# )
-# model = build_model(
-#     config=config,
-#     replace_word_embeddings="vinai/phobert-base"
-# )
+def main():
+    parser = ArgumentParser()
+    sub_parsers = parser.add_subparsers(title="action", dest="action", required=True)
 
-# print(model)
+    # Train arguments
+    train_parser = sub_parsers.add_parser("train", help="Run train script")
+    train_parser.add_argument(
+        "--config", "-c",
+        help="model config",
+        dest="model_config",
+        required=True)
+    train_parser.add_argument(
+        "--experiment", "-e",
+        help="traininig config",
+        dest="training_config",
+        required=True)
+
+    args = parser.parse_args()
+    assert args.action in ["train"]
+
+    if args.action == "train":
+        train()
+
+if __name__ == "__main__":
+    main()

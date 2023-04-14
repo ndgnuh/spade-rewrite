@@ -1,0 +1,2 @@
+replace_word_embeddings: vinai/phobert
+head_size: 256

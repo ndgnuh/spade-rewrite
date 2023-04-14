@@ -2,14 +2,14 @@ import json
 import numpy as np
 import time
 
+from .io import *
+from .datasets import *
+
+
 # spetial token for polygons
 polygon_token_cls = [0] * 8
 polygon_token_sep = [1] * 8
 
-
-def read_jsonl(file):
-    with open(file) as f:
-        return [json.loads(line) for line in f.readlines()]
 
 
 def ensure_numpy(x):
