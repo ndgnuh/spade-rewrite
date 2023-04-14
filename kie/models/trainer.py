@@ -163,7 +163,7 @@ class Trainer:
             class_ids = batch['classes']
             outputs = model(input_ids=input_ids,
                             polygon_ids=polygon_ids)
-            loss = self.criterion(outputs, class_ids)
+            loss = self.criterion(outputs.transpose(-1, 1), classes)
             self.score.to(input_ids.device)
             f1 = self.score(outputs.argmax(dim=-1), class_ids)
             f1s.append(f1.cpu().item())
