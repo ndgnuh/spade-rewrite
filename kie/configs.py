@@ -10,7 +10,39 @@ def _resolve_time(s, num_batches):
     elif s.endswith("epochs"):
         return int(s.replace("epochs", "").replace(" ", "")) * num_batches
     else:
-        raise ValueError(f"time string must ends with 'steps' or 'epochs', eg '100 epochs'")
+        raise ValueError(
+            f"time string must ends with 'steps' or 'epochs', eg '100 epochs'"
+        )
+
+
+@dataclass
+class ModelConfig:
+    name: str
+    task: Dict
+    backbone: Dict
+    head: Dict = field(default_factory=dict)
+    weights: Optional[str] = None
+
+    def __post_init__(self):
+        assert self.task.get("name", None) in ("classification", "masked-modelling")
+
+        if self.weights is not None and not self.weights.startswith("http"):
+            assert path.isfile(self.weights)
+
+    def __getitem__(self, key):
+        return getattr(self, key)
+
+    @property
+    def best_weight_path(self):
+        return path.join("storage", "weights", f"{self.name}.pt")
+
+    @property
+    def latest_weight_path(self):
+        return path.join("storage", "weights", f"{self.name}-latest.pt")
+
+    @property
+    def log_dir(self):
+        return path.join("storage", "logs", self.name)
 
 
 @dataclass
@@ -90,15 +122,22 @@ def validate_model_config(config):
         if key not in mandatory:
             print(f"Unknown key '{key}'")
 
+
 def _read_config(config_file):
     with open(config_file, "r") as f:
         config = yaml.load(f, Loader=yaml.FullLoader)
     return config
 
+
 def read_model_config(config_file):
     config = _read_config(config_file)
-    validate_model_config(config)
+    if "name" not in config:
+        name = path.splitext(path.basename(config_file))[0]
+        config["name"] = name
+
+    config = ModelConfig(**config)
     return config
+
 
 def read_training_config(config_file):
     config = _read_config(config_file)

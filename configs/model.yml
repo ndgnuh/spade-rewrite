@@ -1,4 +1,11 @@
-replace_word_embeddings: vinai/phobert
-type: classify
-head_size: 256
-classes: [name, position, company, address, mail, tel, web, tax]
+weights: storage/weights/model-latest.pt
+
+task:
+  name: classification
+  classes: [name, position, company, address, mail, tel, web, tax]
+
+backbone:
+  replace_word_embeddings: vinai/phobert
+
+head:
+  head_size: 256

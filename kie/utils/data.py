@@ -76,6 +76,12 @@ class MyDataset(Dataset):
             self.tokenizer,
             texts=data['texts'],
             polygons=data['polygons'])
+
+        # Process label
+        token_mapping = processed['token_mapping']
+        processed['classes'] = [-100] + data['classes'] + [-100]
+        processed['classes'] = np.array(processed['classes'])[token_mapping]
+
         return processed
 
 
