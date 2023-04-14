@@ -34,5 +34,8 @@ class Classifier:
 
         outputs = {self.label_map[k]: " ".join(v)
                    for k, v in outputs.items()}
-        outputs.pop("other")
+        try:
+            outputs.pop("other")
+        except Exception:
+            pass
         return outputs

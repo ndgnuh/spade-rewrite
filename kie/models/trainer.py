@@ -22,7 +22,7 @@ class Metrics:
     val_loss: float = 999999
 
     def __str__(self):
-        return " - ".join(f"{k} {v}" for k, v in vars(self).items())
+        return " - ".join(f"{k} {v:.2e}" for k, v in vars(self).items())
 
     def update(self, best_f1=None, val_loss=None):
         updated = False
@@ -34,7 +34,7 @@ class Metrics:
 
         if val_loss is not None:
             updated = updated or (self.val_loss >= val_loss)
-            self.val_loss = min(best_f1, self.best_f1)
+            self.val_loss = min(val_loss, self.val_loss)
 
         return updated
 
@@ -85,7 +85,7 @@ class Trainer:
         self.optimizer = optim.Adam(self.model.parameters(), lr=config.lr)
         self.lr_scheduler = get_cosine_schedule_with_warmup(
             self.optimizer,
-            num_warmup_steps=self.config.validate_every,
+            num_warmup_steps=10000,
             num_training_steps=self.config.training_time
         )
 
@@ -163,7 +163,7 @@ class Trainer:
             class_ids = batch['classes']
             outputs = model(input_ids=input_ids,
                             polygon_ids=polygon_ids)
-            loss = self.criterion(outputs.transpose(-1, 1), classes)
+            loss = self.criterion(outputs.transpose(-1, 1), class_ids)
             self.score.to(input_ids.device)
             f1 = self.score(outputs.argmax(dim=-1), class_ids)
             f1s.append(f1.cpu().item())
@@ -178,7 +178,7 @@ class Trainer:
                 tqdm.write("GT: " + pformat(gt))
 
         mean_f1 = sum(f1s) / len(f1s)
-        val_loss = sum(f1s) / len(f1s)
+        val_loss = sum(losses) / len(losses)
         self.metrics.update(val_loss=val_loss)
         updated = self.metrics.update(best_f1=mean_f1)
         return updated
