@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-from kie import configs
 from argparse import ArgumentParser
 import icecream
+from kie import configs
 icecream.install()
+
 
 def train(args):
     model_config = configs.read_model_config(args.model_config)
@@ -13,9 +14,11 @@ def train(args):
     trainer = Trainer(config)
     trainer.fit()
 
+
 def main():
     parser = ArgumentParser()
-    sub_parsers = parser.add_subparsers(title="action", dest="action", required=True)
+    sub_parsers = parser.add_subparsers(
+        title="action", dest="action", required=True)
 
     # Train arguments
     train_parser = sub_parsers.add_parser("train", help="Run train script")
@@ -35,6 +38,7 @@ def main():
 
     if args.action == "train":
         train(args)
+
 
 if __name__ == "__main__":
     main()

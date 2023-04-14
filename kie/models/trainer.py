@@ -1,14 +1,20 @@
+import random
+from pprint import pformat
+from dataclasses import dataclass
+from functools import partial
+from threading import Thread
+
 import torch
 from lightning.fabric import Fabric
 
 from transformers import get_cosine_schedule_with_warmup
 from tqdm import tqdm
-from functools import partial
 from torch import optim, nn
-from dataclasses import dataclass
 
 from ..utils import build_dataloader
+from ..processors.classification import Classifier
 from .kie import build_model
+
 
 @dataclass
 class Metrics:
@@ -18,7 +24,7 @@ class Metrics:
     def __str__(self):
         return " - ".join(f"{k} {v}" for k, v in vars(self).items())
 
-    def update(self, best_f1 = None, val_loss = None):
+    def update(self, best_f1=None, val_loss=None):
         updated = False
 
         # Best F1 score
@@ -31,6 +37,7 @@ class Metrics:
             self.val_loss = min(best_f1, self.best_f1)
 
         return updated
+
 
 def loop(loader, total_steps):
     count = 0
@@ -52,6 +59,10 @@ class Trainer:
         # Model
         self.fabric = Fabric(**config.lightning_config)
         self.model, tokenizer = build_model(model_config)
+        # TODO: this
+        self.processor = Classifier(
+            tokenizer=tokenizer,
+            label_map=model_config.task['classes'])
 
         # Make dataloaders
         _build_dataloader = partial(
@@ -66,7 +77,7 @@ class Trainer:
 
         # Resolve training scheduling
         config.resolve(
-            num_batches = len(self.train_loader)
+            num_batches=len(self.train_loader)
         )
 
         # Optimization
@@ -117,7 +128,9 @@ class Trainer:
                 self.validate()
 
             if step % print_every == 0:
-                torch.save(model.state_dict(), self.latest_weight_path)
+                Thread(target=torch.save,
+                       args=(model.state_dict(),
+                             self.latest_weight_path)).start()
                 tqdm.write(f"Step {step}/{total_steps} - {self.metrics}")
 
             lr = optimizer.param_groups[0]['lr']
@@ -129,3 +142,19 @@ class Trainer:
         val_loader = self.fabric.setup_dataloaders(self.val_loader)
 
         tqdm.write("Validation")
+        nb = len(val_loader)
+        d_idx = random.choice(range(nb))
+        for idx, batch in enumerate(val_loader):
+            input_ids = batch['input_ids']
+            polygon_ids = batch['polygon_ids']
+            token_mapping = batch['token_mapping']
+            class_ids = batch['classes']
+            outputs = model(input_ids=input_ids,
+                            polygon_ids=polygon_ids)
+            if d_idx == idx:
+                class_logits = torch.softmax(outputs, dim=-1)
+                for (i, m, c, l) in zip(input_ids, token_mapping, class_ids, class_logits):
+                    gt = self.processor.decode(i, m, class_ids=c)
+                    pr = self.processor.decode(i, m, class_logits=l)
+                print("PR: " + pformat(pr))
+                print("GT: " + pformat(gt))
