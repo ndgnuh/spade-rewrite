@@ -1,12 +1,4 @@
- --extra-index-url https://download.pytorch.org/whl/cu113 torch
-numpy
-fastapi
-uvicorn[standard]
-pyyaml
+torch
 transformers
-google-cloud-vision
-python-multipart
-opencv-python
-Pillow
-scipy
-vietocr
+lightning
+pyvi
