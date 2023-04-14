@@ -5,6 +5,7 @@ import torch
 
 from .bros import BrosModel, BrosTokenizer
 
+
 def _replace_layer(
     source: nn.Module,
     target: nn.Module,
@@ -12,12 +13,13 @@ def _replace_layer(
 ):
     pass
 
+
 def build_model(
     config,
-    replace_word_embeddings: Optional[str] = None,
-    bros_pretrain = "base",
 ):
     task = config['task']
+    replace_word_embeddings = config.backbone['replace_word_embeddings']
+    bros_pretrain = config.backbone.get('bros_pretrain', 'base')
     if task['name'] == 'classification':
         model = KIE(
             num_classes=len(task["classes"]) + 1,
@@ -31,11 +33,13 @@ def build_model(
         model.backbone.embeddings.word_embeddings = rep.embeddings.word_embeddings
         tokenizer = AutoTokenizer.from_pretrained(replace_word_embeddings)
     else:
-        tokenizer = BrosTokenizer.from_pretrained(f"naver-clova-ocr/bros-{bros_pretrain}-uncased")
+        tokenizer = BrosTokenizer.from_pretrained(
+            f"naver-clova-ocr/bros-{bros_pretrain}-uncased")
 
     if config.weights is not None:
         model.load_state_dict(torch.load(config.weights, map_location='cpu'))
     return model, tokenizer
+
 
 class KIE(nn.Module):
     def __init__(
@@ -46,7 +50,8 @@ class KIE(nn.Module):
     ):
         super().__init__()
         assert bros_pretrain in ["base", "large"]
-        self.backbone = BrosModel.from_pretrained(f"naver-clova-ocr/bros-{bros_pretrain}-uncased")
+        self.backbone = BrosModel.from_pretrained(
+            f"naver-clova-ocr/bros-{bros_pretrain}-uncased")
         self.config = self.backbone.config
 
         self.projection = nn.Sequential(
@@ -66,4 +71,3 @@ class KIE(nn.Module):
         x = self.projection(hiddens.last_hidden_state)
         cls = self.classify(x)
         return cls
-

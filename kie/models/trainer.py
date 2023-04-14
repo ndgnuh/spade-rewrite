@@ -151,27 +151,34 @@ class Trainer:
         tqdm.write("Validation")
         nb = len(val_loader)
         d_idx = random.choice(range(nb))
+
         f1s = []
-        for idx, batch in enumerate(val_loader):
+        losses = []
+
+        pbar = tqdm(val_loader, "Validate", dynamic_ncols=True)
+        for idx, batch in enumerate(pbar):
             input_ids = batch['input_ids']
             polygon_ids = batch['polygon_ids']
             token_mapping = batch['token_mapping']
             class_ids = batch['classes']
             outputs = model(input_ids=input_ids,
                             polygon_ids=polygon_ids)
-
+            loss = self.criterion(outputs, class_ids)
             self.score.to(input_ids.device)
             f1 = self.score(outputs.argmax(dim=-1), class_ids)
             f1s.append(f1.cpu().item())
+            losses.append(loss.cpu().item())
 
             if d_idx == idx:
                 class_logits = torch.softmax(outputs, dim=-1)
                 for (i, m, c, l) in zip(input_ids, token_mapping, class_ids, class_logits):
                     gt = self.processor.decode(i, m, class_ids=c)
                     pr = self.processor.decode(i, m, class_logits=l)
-                print("PR: " + pformat(pr))
-                print("GT: " + pformat(gt))
+                tqdm.write("PR: " + pformat(pr))
+                tqdm.write("GT: " + pformat(gt))
 
         mean_f1 = sum(f1s) / len(f1s)
+        val_loss = sum(f1s) / len(f1s)
+        self.metrics.update(val_loss=val_loss)
         updated = self.metrics.update(best_f1=mean_f1)
         return updated

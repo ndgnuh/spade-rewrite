@@ -24,7 +24,8 @@ class ModelConfig:
     weights: Optional[str] = None
 
     def __post_init__(self):
-        assert self.task.get("name", None) in ("classification", "masked-modelling")
+        assert self.task.get("name", None) in (
+            "classification", "masked-modelling")
 
         if self.weights is not None and not self.weights.startswith("http"):
             assert path.isfile(self.weights)
@@ -86,7 +87,10 @@ class TrainConfig:
         self.validate_every = _resolve_time(self.validate_every, num_batches)
 
         # Get the default print_every
-        self.print_every = self.print_every or max(self.validate_every // 5, 1)
+        if self.print_every is not None:
+            self.print_every = _resolve_time(self.print_every, num_batches)
+        else:
+            self.print_every = max(self.validate_every // 5, 1)
 
         # Set the resolved flag to true
         self._resolved = True
