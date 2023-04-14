@@ -2,9 +2,9 @@ from kie import configs
 from argparse import ArgumentParser
 
 def train(args):
-    model_config = configs.read_model_config(args["model_config"])
-    config = configs.read_training_config(args["training_config"])
-    config['model'] = model_config
+    model_config = configs.read_model_config(args.model_config)
+    config = configs.read_training_config(args.training_config)
+    config.model_config = model_config
 
     from kie.models import Trainer
     trainer = Trainer(config)
@@ -31,7 +31,7 @@ def main():
     assert args.action in ["train"]
 
     if args.action == "train":
-        train()
+        train(args)
 
 if __name__ == "__main__":
     main()

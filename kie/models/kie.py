@@ -17,7 +17,7 @@ def build_model(
     bros_pretrain = "base",
 ):
     model = KIE(
-        num_classes=config["num_classes"],
+        num_classes=len(config["classes"]) + 1,
         head_size=config["head_size"],
         bros_pretrain=bros_pretrain
     )
