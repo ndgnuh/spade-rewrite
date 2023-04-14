@@ -2,7 +2,7 @@ training_time: 100epochs
 lr: 1e-4
 
 train_data: data/train.jsonl
-valid_data: data/train.jsonl
+val_data: data/train.jsonl
 
 validate_every: 1000steps
 num_workers: 0

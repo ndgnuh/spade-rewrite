@@ -2,7 +2,7 @@ from transformers import AutoModel, AutoTokenizer
 from typing import Optional
 from torch import nn
 
-from .bros import BrosModel
+from .bros import BrosModel, BrosTokenizer
 
 def _replace_layer(
     source: nn.Module,
@@ -24,8 +24,11 @@ def build_model(
     if replace_word_embeddings is not None:
         rep = AutoModel.from_pretrained(replace_word_embeddings)
         model.backbone.embeddings.word_embeddings = rep.embeddings.word_embeddings
+        tokenizer = AutoTokenizer.from_pretrained(replace_word_embeddings)
+    else:
+        tokenizer = BrosTokenizer.from_pretrained(f"naver-clova-ocr/bros-{bros_pretrain}-uncased")
 
-    return model
+    return model, tokenizer
 
 class KIE(nn.Module):
     def __init__(
@@ -52,7 +55,7 @@ class KIE(nn.Module):
             bbox=polygon_ids,
             attention_mask=attention_mask
         )
-        
+
         x = self.projection(hiddens.last_hidden_state)
         cls = self.classify(x)
         return cls

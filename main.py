@@ -1,5 +1,8 @@
+#!/usr/bin/env python3
 from kie import configs
 from argparse import ArgumentParser
+import icecream
+icecream.install()
 
 def train(args):
     model_config = configs.read_model_config(args.model_config)
