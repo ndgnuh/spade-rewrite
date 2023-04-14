@@ -2,10 +2,10 @@ import random
 from pprint import pformat
 from dataclasses import dataclass
 from functools import partial
-from threading import Thread
 
 import torch
 from lightning.fabric import Fabric
+from torchmetrics.classification import MulticlassF1Score
 
 from transformers import get_cosine_schedule_with_warmup
 from tqdm import tqdm
@@ -91,6 +91,11 @@ class Trainer:
 
         # Evaluation and logging
         self.metrics = Metrics()
+        self.score = MulticlassF1Score(
+            len(model_config.task['classes']) + 1,
+            ignore_index=-100
+        )
+
         self.latest_weight_path = model_config['latest_weight_path']
         self.best_weight_path = model_config['best_weight_path']
         self.log_dir = model_config['log_dir']
@@ -125,12 +130,14 @@ class Trainer:
             loss = loss.item()
 
             if step % validate_every == 0:
-                self.validate()
+                updated = self.validate()
+                state_dict = model.state_dict()
+                if updated:
+                    torch.save(state_dict, self.best_weight_path)
+                torch.save(state_dict, self.latest_weight_path)
+                tqdm.write(f"Step {step}/{total_steps} - {self.metrics}")
 
             if step % print_every == 0:
-                Thread(target=torch.save,
-                       args=(model.state_dict(),
-                             self.latest_weight_path)).start()
                 tqdm.write(f"Step {step}/{total_steps} - {self.metrics}")
 
             lr = optimizer.param_groups[0]['lr']
@@ -144,6 +151,7 @@ class Trainer:
         tqdm.write("Validation")
         nb = len(val_loader)
         d_idx = random.choice(range(nb))
+        f1s = []
         for idx, batch in enumerate(val_loader):
             input_ids = batch['input_ids']
             polygon_ids = batch['polygon_ids']
@@ -151,6 +159,11 @@ class Trainer:
             class_ids = batch['classes']
             outputs = model(input_ids=input_ids,
                             polygon_ids=polygon_ids)
+
+            self.score.to(input_ids.device)
+            f1 = self.score(outputs.argmax(dim=-1), class_ids)
+            f1s.append(f1.cpu().item())
+
             if d_idx == idx:
                 class_logits = torch.softmax(outputs, dim=-1)
                 for (i, m, c, l) in zip(input_ids, token_mapping, class_ids, class_logits):
@@ -158,3 +171,7 @@ class Trainer:
                     pr = self.processor.decode(i, m, class_logits=l)
                 print("PR: " + pformat(pr))
                 print("GT: " + pformat(gt))
+
+        mean_f1 = sum(f1s) / len(f1s)
+        updated = self.metrics.update(best_f1=mean_f1)
+        return updated
